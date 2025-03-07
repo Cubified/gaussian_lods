@@ -692,7 +692,7 @@ void main () {
     should_discard = 0.0;
 
     for (int i = MAX_N_LODS - 1; i >= 0; i--) {
-        if (u_lodList[i] < index) {
+        if (u_lodList[i] <= index) {
             current_lod = i;
             break;
         }
@@ -815,7 +815,7 @@ async function main() {
     const camid = document.getElementById("camid");
 
     let projectionMatrix;
-    let currentLod = 1;
+    let currentLod = 0;
 
     const gl = canvas.getContext("webgl2", {
         antialias: false,
@@ -876,7 +876,7 @@ async function main() {
     gl.uniform1i(u_textureLocation, 0);
 
     const u_lodList = gl.getUniformLocation(program, "u_lodList");
-    gl.uniform1iv(u_lodList, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    gl.uniform1iv(u_lodList, [0, 999999, 999999, 999999, 999999, 999999, 999999, 999999, 999999, 999999]);
 
     const u_lod = gl.getUniformLocation(program, "u_lod");
     gl.uniform1i(u_lod, currentLod);
