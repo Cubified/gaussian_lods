@@ -10,8 +10,9 @@ class GaussianData:
     scale: np.ndarray
     opacity: np.ndarray
     sh: np.ndarray
+    lod: np.ndarray
     def flat(self) -> np.ndarray:
-        ret = np.concatenate([self.xyz, self.rot, self.scale, self.opacity, self.sh], axis=-1)
+        ret = np.concatenate([self.xyz, self.rot, self.scale, self.opacity, self.sh, self.lod], axis=-1)
         return np.ascontiguousarray(ret)
 
     def __len__(self):
@@ -106,9 +107,8 @@ def load_ply(path):
     shs = np.concatenate([features_dc.reshape(-1, 3),
                         features_extra.reshape(len(features_dc), -1)], axis=-1).astype(np.float32)
     shs = shs.astype(np.float32)
-    return GaussianData(xyz, rots, scales, opacities, shs)
-
-if __name__ == "__main__":
-    gs = load_ply("C:\\Users\\MSI_NB\\Downloads\\viewers\\models\\train\\point_cloud\\iteration_7000\\point_cloud.ply")
-    a = gs.flat()
-    print(a.shape)
+    if "lod" in plydata.elements[0]:
+        lods = np.asarray(plydata.elements[0]["lod"], dtype=np.int8)
+    else:
+        lods = np.zeros_like(np.asarray(plydata.elements[0]["x"]))
+    return GaussianData(xyz, rots, scales, opacities, shs, lods)
