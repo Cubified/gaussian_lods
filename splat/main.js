@@ -433,7 +433,7 @@ function createWorker(self) {
             lastVertexCount = vertexCount;
         }
 
-        console.time("sort");
+        // console.time("sort");
         let maxDepth = -Infinity;
         let minDepth = Infinity;
         let sizeList = new Int32Array(vertexCount);
@@ -463,7 +463,7 @@ function createWorker(self) {
         for (let i = 0; i < vertexCount; i++)
             depthIndex[starts0[sizeList[i]]++] = i;
 
-        console.timeEnd("sort");
+        // console.timeEnd("sort");
 
         lastProj = viewProj;
         self.postMessage({ depthIndex, viewProj, vertexCount }, [
@@ -526,6 +526,8 @@ function createWorker(self) {
         console.time("calculate importance");
         let sizeList = new Float32Array(vertexCount);
         let sizeIndex = new Uint32Array(vertexCount);
+        let lodList = [];
+        let prevLod = -1;
         for (row = 0; row < vertexCount; row++) {
             sizeIndex[row] = row;
             if (!types["scale_0"]) continue;
@@ -535,6 +537,14 @@ function createWorker(self) {
                 Math.exp(attrs.scale_2);
             const opacity = 1 / (1 + Math.exp(-attrs.opacity));
             sizeList[row] = size * opacity;
+
+            if (types["lod"] && attrs.lod > prevLod) {
+                lodList.push(row);
+                prevLod = attrs.lod;
+            }
+        }
+        while (lodList.length < 10) {
+            lodList.push(lodList[lodList.length - 1]);
         }
         console.timeEnd("calculate importance");
 
@@ -615,7 +625,7 @@ function createWorker(self) {
             }
         }
         console.timeEnd("build buffer");
-        return buffer;
+        return [buffer, lodList];
     }
 
     const throttledSort = () => {
@@ -637,9 +647,9 @@ function createWorker(self) {
         if (e.data.ply) {
             vertexCount = 0;
             runSort(viewProj);
-            buffer = processPlyBuffer(e.data.ply);
+            [buffer, lodList] = processPlyBuffer(e.data.ply);
             vertexCount = Math.floor(buffer.byteLength / rowLength);
-            postMessage({ buffer: buffer, save: !!e.data.save });
+            postMessage({ buffer, lodList, save: false });
         } else if (e.data.buffer) {
             buffer = e.data.buffer;
             vertexCount = e.data.vertexCount;
@@ -652,23 +662,46 @@ function createWorker(self) {
     };
 }
 
+const MAX_N_LODS = 10;
 const vertexShaderSource = `
 #version 300 es
 precision highp float;
 precision highp int;
 
+#define MAX_N_LODS ${MAX_N_LODS}
+#define DISCARD gl_Position = vec4(0.0, 0.0, 2.0, 1.0); \
+    should_discard = 1.0; \
+    return
+
 uniform highp usampler2D u_texture;
 uniform mat4 projection, view;
 uniform vec2 focal;
 uniform vec2 viewport;
+uniform int u_lodList[MAX_N_LODS];
+uniform int u_lod;
 
 in vec2 position;
 in int index;
 
 out vec4 vColor;
 out vec2 vPosition;
+out float should_discard;
 
 void main () {
+    int current_lod = 0;
+    should_discard = 0.0;
+
+    for (int i = MAX_N_LODS - 1; i >= 0; i--) {
+        if (u_lodList[i] < index) {
+            current_lod = i;
+            break;
+        }
+    }
+
+    if (current_lod != u_lod) {
+        DISCARD;
+    }
+
     uvec4 cen = texelFetch(u_texture, ivec2((uint(index) & 0x3ffu) << 1, uint(index) >> 10), 0);
     vec4 cam = view * vec4(uintBitsToFloat(cen.xyz), 1);
     vec4 pos2d = projection * cam;
@@ -719,10 +752,14 @@ precision highp float;
 
 in vec4 vColor;
 in vec2 vPosition;
+in float index_flt;
+in float should_discard;
 
 out vec4 fragColor;
 
 void main () {
+    if (should_discard > 0.0) discard;
+
     float A = -dot(vPosition, vPosition);
     if (A < -4.0) discard;
     float B = exp(A) * vColor.a;
@@ -778,6 +815,7 @@ async function main() {
     const camid = document.getElementById("camid");
 
     let projectionMatrix;
+    let currentLod = 1;
 
     const gl = canvas.getContext("webgl2", {
         antialias: false,
@@ -837,6 +875,12 @@ async function main() {
     var u_textureLocation = gl.getUniformLocation(program, "u_texture");
     gl.uniform1i(u_textureLocation, 0);
 
+    const u_lodList = gl.getUniformLocation(program, "u_lodList");
+    gl.uniform1iv(u_lodList, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+    const u_lod = gl.getUniformLocation(program, "u_lod");
+    gl.uniform1i(u_lod, currentLod);
+
     const indexBuffer = gl.createBuffer();
     const a_index = gl.getAttribLocation(program, "index");
     gl.enableVertexAttribArray(a_index);
@@ -869,6 +913,9 @@ async function main() {
     worker.onmessage = (e) => {
         if (e.data.buffer) {
             splatData = new Uint8Array(e.data.buffer);
+
+            gl.uniform1iv(u_lodList, e.data.lodList);
+
             if (e.data.save) {
                 const blob = new Blob([splatData.buffer], {
                     type: "application/octet-stream",
@@ -949,6 +996,17 @@ async function main() {
         } else if (e.code === "KeyP") {
             carousel = true;
             camid.innerText = "";
+        }
+
+        if (e.code == "KeyO") {
+            if (e.shiftKey) {
+                currentLod--;
+                if (currentLod < 0) currentLod = MAX_N_LODS - 1;
+            } else {
+                currentLod = (currentLod + 1) % MAX_N_LODS;
+            }
+            gl.uniform1i(u_lod, currentLod);
+            console.log("LOD", currentLod);
         }
     });
     window.addEventListener("keyup", (e) => {
@@ -1412,7 +1470,7 @@ async function main() {
 
                 if (isPly(splatData)) {
                     // ply file magic header means it should be handled differently
-                    worker.postMessage({ ply: splatData.buffer, save: true });
+                    worker.postMessage({ ply: splatData.buffer, save: false });
                 } else {
                     worker.postMessage({
                         buffer: splatData.buffer,
