@@ -679,17 +679,25 @@ uniform vec2 focal;
 uniform vec2 viewport;
 uniform int u_lodList[MAX_N_LODS];
 uniform int u_lod;
+uniform int u_depthMode;
 
 in vec2 position;
 in int index;
 
 out vec4 vColor;
 out vec2 vPosition;
+out float vDepth;
+out float vLod;
+out float depth_mode;
 out float should_discard;
+
+const float lod_depths[MAX_N_LODS] = float[MAX_N_LODS](1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 999999.0);
 
 void main () {
     int current_lod = 0;
     should_discard = 0.0;
+
+    depth_mode = (u_depthMode == 1) ? 1.0 : 0.0;
 
     for (int i = MAX_N_LODS - 1; i >= 0; i--) {
         if (u_lodList[i] <= index) {
@@ -698,19 +706,26 @@ void main () {
         }
     }
 
+    /*
     if (current_lod != u_lod) {
         DISCARD;
     }
+    */
 
     uvec4 cen = texelFetch(u_texture, ivec2((uint(index) & 0x3ffu) << 1, uint(index) >> 10), 0);
     vec4 cam = view * vec4(uintBitsToFloat(cen.xyz), 1);
     vec4 pos2d = projection * cam;
 
     float clip = 1.2 * pos2d.w;
+    vDepth = pos2d.w / 10.0;
     if (pos2d.z < -clip || pos2d.x < -clip || pos2d.x > clip || pos2d.y < -clip || pos2d.y > clip) {
-        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
-        return;
+        DISCARD;
     }
+
+    if (vDepth > lod_depths[current_lod] || (current_lod > 0 && vDepth <= lod_depths[current_lod - 1])) {
+        DISCARD;
+    }
+    vLod = float(current_lod) / float(MAX_N_LODS);
 
     uvec4 cov = texelFetch(u_texture, ivec2(((uint(index) & 0x3ffu) << 1) | 1u, uint(index) >> 10), 0);
     vec2 u1 = unpackHalf2x16(cov.x), u2 = unpackHalf2x16(cov.y), u3 = unpackHalf2x16(cov.z);
@@ -752,7 +767,9 @@ precision highp float;
 
 in vec4 vColor;
 in vec2 vPosition;
-in float index_flt;
+in float vDepth;
+in float vLod;
+in float depth_mode;
 in float should_discard;
 
 out vec4 fragColor;
@@ -763,7 +780,12 @@ void main () {
     float A = -dot(vPosition, vPosition);
     if (A < -4.0) discard;
     float B = exp(A) * vColor.a;
-    fragColor = vec4(B * vColor.rgb, B);
+
+    if (depth_mode > 0.0) {
+        fragColor = vec4(0.0, vDepth, vLod, 1.0);
+    } else {
+        fragColor = vec4(B * vColor.rgb, B);
+    }
 }
 
 `.trim();
@@ -816,6 +838,7 @@ async function main() {
 
     let projectionMatrix;
     let currentLod = 0;
+    let depthMode = 0;
 
     const gl = canvas.getContext("webgl2", {
         antialias: false,
@@ -877,6 +900,9 @@ async function main() {
 
     const u_lodList = gl.getUniformLocation(program, "u_lodList");
     gl.uniform1iv(u_lodList, [0, 999999, 999999, 999999, 999999, 999999, 999999, 999999, 999999, 999999]);
+
+    const u_depthMode = gl.getUniformLocation(program, "u_depthMode");
+    gl.uniform1i(u_depthMode, depthMode);
 
     const u_lod = gl.getUniformLocation(program, "u_lod");
     gl.uniform1i(u_lod, currentLod);
@@ -999,6 +1025,7 @@ async function main() {
         }
 
         if (e.code == "KeyO") {
+            /*
             if (e.shiftKey) {
                 currentLod--;
                 if (currentLod < 0) currentLod = MAX_N_LODS - 1;
@@ -1007,6 +1034,10 @@ async function main() {
             }
             gl.uniform1i(u_lod, currentLod);
             console.log("LOD", currentLod);
+            */
+            if (!depthMode) depthMode = 1;
+            else depthMode = 0;
+            gl.uniform1i(u_depthMode, depthMode);
         }
     });
     window.addEventListener("keyup", (e) => {
