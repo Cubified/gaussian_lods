@@ -2,4 +2,4 @@
 __pycache__
 run.sh
 *.ply
-k_means/k_means
+lod_generator/lod_generator
