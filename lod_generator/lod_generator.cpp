@@ -6,13 +6,18 @@
 #include <cstdlib>
 #include <limits>
 #include <random>
+#include <set>
 
 #include "tqdm.hpp"
+
+#define MAX(a, b) ((a) < (b) ? (a) : (b))
 
 #define TINYPLY_IMPLEMENTATION
 #include "tinyply.h"
 
 using namespace std;
+
+#define EPS 1e-6
 
 struct float3 { float x, y, z; };
 struct float4 { float x, y, z, w; };
@@ -75,7 +80,7 @@ vector<Gaussian> load_ply(const string& path) {
 inline float squared_euclidean_distance(const vector<float> &a, const vector<float> &b) {
     float dist = 0.0f;
 #pragma omp unroll
-    for (size_t i = 0; i < 6; ++i) {
+    for (size_t i = 0; i < 10; ++i) {
     // for (size_t i = 0; i < a.size(); ++i) {
         float diff = a[i] - b[i];
         dist += diff * diff;
@@ -83,7 +88,7 @@ inline float squared_euclidean_distance(const vector<float> &a, const vector<flo
     return dist;
 }
 
-vector<int> cluster_gaussians(const vector<vector<float>> &data, int k, int max_iters = 100) {
+vector<int> k_means(const vector<vector<float>> &data, int k, int max_iters = 100) {
     size_t n = data.size();
     size_t dim = data[0].size();
     vector<vector<float>> centroids(k, vector<float>(dim));
@@ -145,6 +150,83 @@ vector<int> cluster_gaussians(const vector<vector<float>> &data, int k, int max_
     return assignments;
 }
 
+vector<int> k_medoids(const vector<vector<float>>& data, int k, int max_iters = 100) {
+    size_t n = data.size();
+    vector<int> medoids(k);
+    vector<int> assignments(n, -1);
+    
+    // Randomly initialize medoids
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_int_distribution<size_t> dist(0, n - 1);
+    for (int i = 0; i < k; ++i) {
+        medoids[i] = dist(gen);
+    }
+    
+    for (int iter = 0; iter < max_iters; ++iter) {
+        bool changed = false;
+        
+        // Assign points to the nearest medoid
+        for (size_t i = 0; i < n; ++i) {
+            int best_cluster = 0;
+            float best_distance = numeric_limits<float>::max();
+            for (int j = 0; j < k; ++j) {
+                float dist = squared_euclidean_distance(data[i], data[medoids[j]]);
+                if (dist < best_distance) {
+                    best_distance = dist;
+                    best_cluster = j;
+                }
+            }
+            if (assignments[i] != best_cluster) {
+                assignments[i] = best_cluster;
+                changed = true;
+            }
+        }
+        
+        // If no assignments changed, stop early
+        if (!changed) break;
+        
+        // Update medoids by minimizing total cost
+        for (int j = 0; j < k; ++j) {
+            int best_medoid = medoids[j];
+            float best_cost = 0.0f;
+            for (size_t i = 0; i < n; ++i) {
+                if (assignments[i] == j) {
+                    best_cost += squared_euclidean_distance(data[i], data[best_medoid]);
+                }
+            }
+            for (size_t i = 0; i < n; ++i) {
+                if (assignments[i] == j) {
+                    float swap_cost = 0.0f;
+                    for (size_t m = 0; m < n; ++m) {
+                        if (assignments[m] == j) {
+                            swap_cost += squared_euclidean_distance(data[m], data[i]);
+                        }
+                    }
+                    if (swap_cost < best_cost) {
+                        best_medoid = i;
+                        best_cost = swap_cost;
+                    }
+                }
+            }
+            medoids[j] = best_medoid;
+        }
+    }
+    
+    return assignments;
+}
+
+vector<int> cluster_gaussians(string method, const vector<vector<float>> &data, int k, int max_iters = 100) {
+    if (method == "kmeans") {
+        return k_means(data, k, max_iters);
+    } else if (method == "kmedoids") {
+        return k_medoids(data, k, max_iters);
+    }
+
+    cerr << "Error: Unrecognized clustering algorithm " << method << endl;
+    return vector<int>();
+}
+
 Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
     float total_opacity = 0;
     float3 pos = {0, 0, 0};
@@ -166,13 +248,13 @@ Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
         rot.x += g.opacity * g.rot.x;
         rot.y += g.opacity * g.rot.y;
         rot.z += g.opacity * g.rot.z;
-        rot.w += g.opacity * g.rot.z;
+        rot.w += g.opacity * g.rot.w;
 
         sh.x += g.opacity * g.sh.x;
         sh.y += g.opacity * g.sh.y;
         sh.z += g.opacity * g.sh.z;
     }
-    if (total_opacity == 0) {
+    if (fabs(total_opacity) < EPS) {
         Gaussian g = Gaussian(pos, scale, rot, total_opacity, sh, lod);
         g.invalid = true;
         return g;
@@ -182,6 +264,11 @@ Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
     pos.y /= total_opacity;
     pos.z /= total_opacity;
 
+    sh.x /= total_opacity;
+    sh.y /= total_opacity;
+    sh.z /= total_opacity;
+
+    /*
     scale.x /= total_opacity;
     scale.y /= total_opacity;
     scale.z /= total_opacity;
@@ -196,10 +283,7 @@ Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
     rot.y /= rot_len;
     rot.z /= rot_len;
     rot.w /= rot_len;
-
-    sh.x /= total_opacity;
-    sh.y /= total_opacity;
-    sh.z /= total_opacity;
+    */
 
     return Gaussian(pos, scale, rot, total_opacity, sh, lod);
 }
@@ -212,21 +296,28 @@ void save_ply(const string &path, const vector<Gaussian> &gaussians) {
     vector<float> data_f;
     vector<int32_t> data_i;
 
-    for (auto g : gaussians) {
+    for (const auto &g : gaussians) {
+        float rot_norm = sqrt((g.rot.x * g.rot.x) + (g.rot.y * g.rot.y) + (g.rot.z * g.rot.z) + (g.rot.w * g.rot.w));
+
+        float opacity = 0;
+        if ((1.0 / (g.opacity + 1.0e-8)) > 0.0) {
+            opacity = -log((1.0 / (opacity + 1.0e-8)) - 1.0);
+        }
+
         data_f.push_back(g.pos.x);
         data_f.push_back(g.pos.y);
         data_f.push_back(g.pos.z);
-        data_f.push_back(g.opacity);
-        data_f.push_back(g.scale.x);
-        data_f.push_back(g.scale.y);
-        data_f.push_back(g.scale.z);
+        data_f.push_back(opacity);
+        data_f.push_back(log(max(1.0e-8, g.scale.x)));
+        data_f.push_back(log(max(1.0e-8, g.scale.y)));
+        data_f.push_back(log(max(1.0e-8, g.scale.z)));
         data_f.push_back(g.sh.x);
         data_f.push_back(g.sh.y);
         data_f.push_back(g.sh.z);
-        data_f.push_back(g.rot.x);
-        data_f.push_back(g.rot.y);
-        data_f.push_back(g.rot.z);
-        data_f.push_back(g.rot.w);
+        data_f.push_back(g.rot.x / rot_norm);
+        data_f.push_back(g.rot.y / rot_norm);
+        data_f.push_back(g.rot.z / rot_norm);
+        data_f.push_back(g.rot.w / rot_norm);
 
         data_i.push_back(g.lod);
     }
@@ -242,15 +333,22 @@ void save_ply(const string &path, const vector<Gaussian> &gaussians) {
 
 int main(int argc, char **argv) {
     if (argc < 3) {
-        cout << "Usage: k_means [in.ply] [out.ply]" << endl;
+        cout << "Usage: k_means <in.ply> <out.ply> [kmeans|kmedoids]" << endl;
         return 0;
     }
 
     string input_path = string(argv[1]);
     string output_path = string(argv[2]);
+    string method = string(argc == 3 ? "kmeans" : argv[3]);
 
     cout << "Loading... ";
     auto gaussians = load_ply(input_path);
+
+    vector<Gaussian> tmp;
+    for (int i = 0; i < 10000; i++) {
+        tmp.push_back(gaussians[i]);
+    }
+    gaussians = tmp;
 
     cout << gaussians.size() << " Gaussians" << endl;
     
@@ -281,20 +379,18 @@ int main(int argc, char **argv) {
             tmp.push_back(g.sh.y);
             tmp.push_back(g.sh.z);
 
-            /*
             tmp.push_back(g.scale.x);
             tmp.push_back(g.scale.y);
             tmp.push_back(g.scale.z);
 
             tmp.push_back(g.opacity);
-            */
 
             features[i] = tmp;
         }
 
         int n_iters = 2;
         cout << "  Clustering (" << n_iters << " iterations)..." << endl;
-        vector<int> labels = cluster_gaussians(features, n_labels, n_iters);
+        vector<int> labels = cluster_gaussians(method, features, n_labels, n_iters);
 
         vector<vector<Gaussian>> clustered_gaussians(n_labels);
         for (int i = 0; i < n_labels; i++) {

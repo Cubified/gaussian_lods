@@ -1,17 +1,17 @@
-all: k_means
+all: lod_generator
 
 CC=c++
 
-LIBS=-fopenmp -lomp
+LIBS=-fopenmp -lgomp
 CFLAGS=-O3 -pipe -std=c++20
 DEBUGCFLAGS=-Og -pipe -g -std=c++20
 
-INPUT=k_means.cpp
-OUTPUT=k_means
+INPUT=lod_generator.cpp
+OUTPUT=lod_generator
 
 RM=/bin/rm
 
-k_means: $(INPUT)
+lod_generator: $(INPUT)
 	$(CC) $(INPUT) -o $(OUTPUT) $(LIBS) $(CFLAGS)
 debug: $(INPUT)
 	$(CC) $(INPUT) -o $(OUTPUT) $(LIBS) $(DEBUGCFLAGS)
