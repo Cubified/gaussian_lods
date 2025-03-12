@@ -13,6 +13,7 @@
 #include "tqdm.hpp"
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define N_GAUSSIAN_FEATURES 6
 
 #define TINYPLY_IMPLEMENTATION
 #include "tinyply.h"
@@ -55,7 +56,7 @@ vector<Gaussian> load_ply(const string& path) {
 
     file.read(ss);
 
-#define GET_AS_VEC(in, out, type) do { \
+#define GET_AS_VEC(in, out) do { \
     const size_t n_bytes = in->buffer.size_bytes(); \
     out.reserve(in->count); \
     memcpy(out.data(), in->buffer.get(), n_bytes); \
@@ -65,11 +66,11 @@ vector<Gaussian> load_ply(const string& path) {
     vector<float3> verts, scales, shs;
     vector<float4> rots;
 
-    GET_AS_VEC(ply_verts, verts, float3);
-    GET_AS_VEC(ply_scales, scales, float3);
-    GET_AS_VEC(ply_shs, shs, float3);
-    GET_AS_VEC(ply_opacities, opacities, float);
-    GET_AS_VEC(ply_rots, rots, float4);
+    GET_AS_VEC(ply_verts,     verts);
+    GET_AS_VEC(ply_scales,    scales);
+    GET_AS_VEC(ply_shs,       shs);
+    GET_AS_VEC(ply_opacities, opacities);
+    GET_AS_VEC(ply_rots,      rots);
 
     vector<Gaussian> gaussians;
     for (int i = 0; i < ply_verts->count; ++i) {
@@ -88,7 +89,7 @@ vector<Gaussian> load_ply(const string& path) {
 inline float squared_euclidean_distance(const vector<float> &a, const vector<float> &b) {
     float dist = 0.0f;
 #pragma omp unroll
-    for (size_t i = 0; i < 10; ++i) {
+    for (size_t i = 0; i < N_GAUSSIAN_FEATURES; ++i) {
     // for (size_t i = 0; i < a.size(); ++i) {
         float diff = a[i] - b[i];
         dist += diff * diff;
@@ -163,7 +164,6 @@ vector<int> k_medoids(const vector<vector<float>>& data, int k, int max_iters = 
     vector<int> medoids(k);
     vector<int> assignments(n, -1);
     
-    // Randomly initialize medoids
     random_device rd;
     mt19937 gen(rd());
     uniform_int_distribution<size_t> dist(0, n - 1);
@@ -174,7 +174,7 @@ vector<int> k_medoids(const vector<vector<float>>& data, int k, int max_iters = 
     for (int iter = 0; iter < max_iters; ++iter) {
         bool changed = false;
         
-        // Assign points to the nearest medoid
+#pragma omp parallel for
         for (size_t i = 0; i < n; ++i) {
             int best_cluster = 0;
             float best_distance = numeric_limits<float>::max();
@@ -191,10 +191,9 @@ vector<int> k_medoids(const vector<vector<float>>& data, int k, int max_iters = 
             }
         }
         
-        // If no assignments changed, stop early
         if (!changed) break;
         
-        // Update medoids by minimizing total cost
+#pragma omp parallel for
         for (int j = 0; j < k; ++j) {
             int best_medoid = medoids[j];
             float best_cost = 0.0f;
@@ -241,7 +240,7 @@ Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
     float3 scale = {0, 0, 0};
     float4 rot = {0, 0, 0, 0};
     float3 sh = {0, 0, 0};
-    Eigen::Matrix3d cov3Ds = Eigen::Matrix3d::Zero();
+    // Eigen::Matrix3d cov3Ds = Eigen::Matrix3d::Zero();
 
     for (const auto &g : gaussians) {
         total_opacity += g.opacity;
@@ -254,6 +253,20 @@ Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
         sh.y += g.opacity * g.sh.y;
         sh.z += g.opacity * g.sh.z;
 
+        /*scale.x += g.opacity * g.scale.x;
+        scale.y += g.opacity * g.scale.y;
+        scale.z += g.opacity * g.scale.z;*/
+
+        scale.x = MAX(scale.x, g.scale.x);
+        scale.y = MAX(scale.y, g.scale.y);
+        scale.z = MAX(scale.z, g.scale.z);
+
+        rot.x += g.opacity * g.rot.x;
+        rot.y += g.opacity * g.rot.y;
+        rot.z += g.opacity * g.rot.z;
+        rot.w += g.opacity * g.rot.w;
+
+        /*
         Eigen::Quaterniond q(g.rot.x, g.rot.y, g.rot.z, g.rot.w);
         Eigen::Matrix3d R = q.toRotationMatrix();
 
@@ -263,6 +276,7 @@ Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
             0, (g.scale.y * g.scale.y), 0,
             0, 0, (g.scale.z * g.scale.z);
         cov3Ds += R.transpose() * cov3D * R;
+        */
     }
     if (fabs(total_opacity) < EPS) {
         Gaussian g = Gaussian(pos, scale, rot, total_opacity, sh, lod);
@@ -278,6 +292,19 @@ Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
     sh.y /= total_opacity;
     sh.z /= total_opacity;
 
+    /*
+    scale.x /= total_opacity;
+    scale.y /= total_opacity;
+    scale.z /= total_opacity;
+    */
+
+    float rot_len = sqrt((rot.x * rot.x) + (rot.y * rot.y) + (rot.z * rot.z) + (rot.w * rot.w));
+    rot.x /= rot_len;
+    rot.y /= rot_len;
+    rot.z /= rot_len;
+    rot.w /= rot_len;
+
+    /*
     cov3Ds /= total_opacity;
 
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigensolver(cov3Ds);
@@ -302,6 +329,7 @@ Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
     scale.x = sqrt(eigenvalues[0]);
     scale.y = sqrt(eigenvalues[1]);
     scale.z = sqrt(eigenvalues[2]);
+    */
 
     return Gaussian(pos, scale, rot, total_opacity, sh, lod);
 }
@@ -319,7 +347,7 @@ void save_ply(const string &path, const vector<Gaussian> &gaussians) {
 
         float opacity = 0;
         if ((1.0 / (g.opacity + EPS)) > 0.0) {
-            opacity = -log((1.0 / (opacity + EPS)) - 1.0);
+            opacity = -log((1.0 / (g.opacity + EPS)) - 1.0);
         }
 
         data_f.push_back(g.pos.x);
@@ -363,13 +391,10 @@ int main(int argc, char **argv) {
     auto gaussians = load_ply(input_path);
 
     vector<Gaussian> tmp;
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 100000; i++) {
         tmp.push_back(gaussians[i]);
     }
     gaussians = tmp;
-
-    save_ply(output_path, gaussians);
-    return 0;
 
     cout << gaussians.size() << " Gaussians" << endl;
     
@@ -400,11 +425,11 @@ int main(int argc, char **argv) {
             tmp.push_back(g.sh.y);
             tmp.push_back(g.sh.z);
 
-            tmp.push_back(g.scale.x);
+            /*tmp.push_back(g.scale.x);
             tmp.push_back(g.scale.y);
             tmp.push_back(g.scale.z);
 
-            tmp.push_back(g.opacity);
+            tmp.push_back(g.opacity);*/
 
             features[i] = tmp;
         }

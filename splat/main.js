@@ -679,7 +679,7 @@ uniform vec2 focal;
 uniform vec2 viewport;
 uniform int u_lodList[MAX_N_LODS];
 uniform int u_lod;
-uniform int u_depthMode;
+uniform int u_viewMode;
 
 in vec2 position;
 in int index;
@@ -697,7 +697,7 @@ void main () {
     int current_lod = 0;
     should_discard = 0.0;
 
-    depth_mode = (u_depthMode == 1) ? 1.0 : 0.0;
+    depth_mode = (u_viewMode == 1) ? 1.0 : 0.0;
 
     for (int i = MAX_N_LODS - 1; i >= 0; i--) {
         if (u_lodList[i] <= index) {
@@ -706,11 +706,9 @@ void main () {
         }
     }
 
-    /*
-    if (current_lod != u_lod) {
+    if (u_viewMode == 2 && current_lod != u_lod) {
         DISCARD;
     }
-    */
 
     uvec4 cen = texelFetch(u_texture, ivec2((uint(index) & 0x3ffu) << 1, uint(index) >> 10), 0);
     vec4 cam = view * vec4(uintBitsToFloat(cen.xyz), 1);
@@ -722,7 +720,7 @@ void main () {
         DISCARD;
     }
 
-    if (vDepth > lod_depths[current_lod] || (current_lod > 0 && vDepth <= lod_depths[current_lod - 1])) {
+    if (u_viewMode != 2 && (vDepth > lod_depths[current_lod] || (current_lod > 0 && vDepth <= lod_depths[current_lod - 1]))) {
         DISCARD;
     }
     vLod = float(current_lod) / float(MAX_N_LODS);
@@ -838,7 +836,7 @@ async function main() {
 
     let projectionMatrix;
     let currentLod = 0;
-    let depthMode = 0;
+    let viewMode = 0;
 
     const gl = canvas.getContext("webgl2", {
         antialias: false,
@@ -901,8 +899,8 @@ async function main() {
     const u_lodList = gl.getUniformLocation(program, "u_lodList");
     gl.uniform1iv(u_lodList, [0, 999999, 999999, 999999, 999999, 999999, 999999, 999999, 999999, 999999]);
 
-    const u_depthMode = gl.getUniformLocation(program, "u_depthMode");
-    gl.uniform1i(u_depthMode, depthMode);
+    const u_viewMode = gl.getUniformLocation(program, "u_viewMode");
+    gl.uniform1i(u_viewMode, viewMode);
 
     const u_lod = gl.getUniformLocation(program, "u_lod");
     gl.uniform1i(u_lod, currentLod);
@@ -1025,7 +1023,10 @@ async function main() {
         }
 
         if (e.code == "KeyO") {
-            /*
+            viewMode = (viewMode + 1) % 3;
+            gl.uniform1i(u_viewMode, viewMode);
+        }
+        if (e.code === "KeyG") {
             if (e.shiftKey) {
                 currentLod--;
                 if (currentLod < 0) currentLod = MAX_N_LODS - 1;
@@ -1034,10 +1035,6 @@ async function main() {
             }
             gl.uniform1i(u_lod, currentLod);
             console.log("LOD", currentLod);
-            */
-            if (!depthMode) depthMode = 1;
-            else depthMode = 0;
-            gl.uniform1i(u_depthMode, depthMode);
         }
     });
     window.addEventListener("keyup", (e) => {
