@@ -91,7 +91,6 @@ inline float squared_euclidean_distance(const vector<float> &a, const vector<flo
     float dist = 0.0f;
 #pragma omp unroll
     for (size_t i = 0; i < N_GAUSSIAN_FEATURES; ++i) {
-    // for (size_t i = 0; i < a.size(); ++i) {
         float diff = a[i] - b[i];
         dist += diff * diff;
     }
@@ -112,11 +111,9 @@ vector<int> k_means(const vector<vector<float>> &data, int k, int max_iters = 10
     }
 
     for (int iter = 0; iter < max_iters; ++iter) {
-        // cout << "Iteration " << iter << ":" << endl;
         bool changed = false;
 
         for (size_t i : tq::trange(n)) {
-        // for (size_t i = 0; i < n; ++i) {
             int best_cluster = 0;
             float best_distance = numeric_limits<float>::max();
 #pragma omp parallel for
@@ -243,7 +240,6 @@ Gaussian mean_merge(const vector<Gaussian> &gaussians, int32_t lod = 1) {
     float3 scale = {0, 0, 0};
     float4 rot = {0, 0, 0, 0};
     float3 sh = {0, 0, 0};
-    // Eigen::Matrix3d cov3Ds = Eigen::Matrix3d::Zero();
 
     for (const auto &g : gaussians) {
         total_opacity += g.opacity;
@@ -256,10 +252,6 @@ Gaussian mean_merge(const vector<Gaussian> &gaussians, int32_t lod = 1) {
         sh.y += g.opacity * g.sh.y;
         sh.z += g.opacity * g.sh.z;
 
-        /*scale.x += g.opacity * g.scale.x;
-        scale.y += g.opacity * g.scale.y;
-        scale.z += g.opacity * g.scale.z;*/
-
         scale.x = MAX(scale.x, g.scale.x);
         scale.y = MAX(scale.y, g.scale.y);
         scale.z = MAX(scale.z, g.scale.z);
@@ -268,18 +260,6 @@ Gaussian mean_merge(const vector<Gaussian> &gaussians, int32_t lod = 1) {
         rot.y += g.opacity * g.rot.y;
         rot.z += g.opacity * g.rot.z;
         rot.w += g.opacity * g.rot.w;
-
-        /*
-        Eigen::Quaterniond q(g.rot.x, g.rot.y, g.rot.z, g.rot.w);
-        Eigen::Matrix3d R = q.toRotationMatrix();
-
-        Eigen::Matrix3d cov3D;
-        cov3D <<
-            (g.scale.x * g.scale.x), 0, 0,
-            0, (g.scale.y * g.scale.y), 0,
-            0, 0, (g.scale.z * g.scale.z);
-        cov3Ds += R.transpose() * cov3D * R;
-        */
     }
     if (fabs(total_opacity) < EPS) {
         return Gaussian();
@@ -293,44 +273,72 @@ Gaussian mean_merge(const vector<Gaussian> &gaussians, int32_t lod = 1) {
     sh.y /= total_opacity;
     sh.z /= total_opacity;
 
-    /*
-    scale.x /= total_opacity;
-    scale.y /= total_opacity;
-    scale.z /= total_opacity;
-    */
-
     float rot_len = sqrt((rot.x * rot.x) + (rot.y * rot.y) + (rot.z * rot.z) + (rot.w * rot.w));
     rot.x /= rot_len;
     rot.y /= rot_len;
     rot.z /= rot_len;
     rot.w /= rot_len;
 
-    /*
-    cov3Ds /= total_opacity;
+    return Gaussian(pos, scale, rot, total_opacity, sh, lod);
+}
 
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigensolver(cov3Ds);
-    auto eigenvalues = eigensolver.eigenvalues();
-    auto eigenvectors = eigensolver.eigenvectors();
-    if (eigenvectors.determinant() < 0) {
-        eigenvectors.col(0) *= -1;
+Gaussian mean_volume_merge(const vector<Gaussian> &gaussians, int32_t lod = 1) {
+    float total_opacity = 0;
+    float total_volume = 0;
+    float3 pos = {0, 0, 0};
+    float3 scale = {0, 0, 0};
+    float4 rot = {0, 0, 0, 0};
+    float3 sh = {0, 0, 0};
+
+    for (const auto &g : gaussians) {
+        Eigen::Quaterniond q(g.rot.x, g.rot.y, g.rot.z, g.rot.w);
+        Eigen::Matrix3d R = q.toRotationMatrix();
+
+        Eigen::Matrix3d cov3D;
+        cov3D <<
+            (g.scale.x * g.scale.x), 0, 0,
+            0, (g.scale.y * g.scale.y), 0,
+            0, 0, (g.scale.z * g.scale.z);
+        cov3D = R.transpose() * cov3D * R;
+
+        float volume = cov3D.determinant();
+        total_volume += volume;
+        total_opacity += g.opacity;
+
+        pos.x += volume * g.pos.x;
+        pos.y += volume * g.pos.y;
+        pos.z += volume * g.pos.z;
+
+        sh.x += volume * g.sh.x;
+        sh.y += volume * g.sh.y;
+        sh.z += volume * g.sh.z;
+
+        scale.x = MAX(scale.x, g.scale.x);
+        scale.y = MAX(scale.y, g.scale.y);
+        scale.z = MAX(scale.z, g.scale.z);
+
+        rot.x += volume * g.rot.x;
+        rot.y += volume * g.rot.y;
+        rot.z += volume * g.rot.z;
+        rot.w += volume * g.rot.w;
+    }
+    if (fabs(total_opacity) < EPS) {
+        return Gaussian();
     }
 
-    Eigen::Quaterniond qrot(eigenvectors);
-    rot.x = qrot.x();
-    rot.y = qrot.y();
-    rot.z = qrot.z();
-    rot.w = qrot.w();
+    pos.x /= total_volume;
+    pos.y /= total_volume;
+    pos.z /= total_volume;
+
+    sh.x /= total_volume;
+    sh.y /= total_volume;
+    sh.z /= total_volume;
 
     float rot_len = sqrt((rot.x * rot.x) + (rot.y * rot.y) + (rot.z * rot.z) + (rot.w * rot.w));
     rot.x /= rot_len;
     rot.y /= rot_len;
     rot.z /= rot_len;
     rot.w /= rot_len;
-
-    scale.x = sqrt(eigenvalues[0]);
-    scale.y = sqrt(eigenvalues[1]);
-    scale.z = sqrt(eigenvalues[2]);
-    */
 
     return Gaussian(pos, scale, rot, total_opacity, sh, lod);
 }
@@ -371,6 +379,8 @@ Gaussian max_merge(const vector<Gaussian> &gaussians, int32_t lod = 1) {
 Gaussian merge_gaussians(string method, const vector<Gaussian> &gaussians, int32_t lod = 1) {
     if (method == "mean") {
         return mean_merge(gaussians, lod);
+    } else if (method == "mean_volume") {
+        return mean_volume_merge(gaussians, lod);
     } else if (method == "max") {
         return max_merge(gaussians, lod);
     }
@@ -424,7 +434,7 @@ void save_ply(const string &path, const vector<Gaussian> &gaussians) {
 
 int main(int argc, char **argv) {
     if (argc < 3) {
-        cout << "Usage: k_means <in.ply> <out.ply> [kmeans|kmedoids] [mean|max]" << endl;
+        cout << "Usage: k_means <in.ply> <out.ply> [kmeans|kmedoids] [mean|mean_volume|max]" << endl;
         return 0;
     }
 
@@ -458,7 +468,7 @@ int main(int argc, char **argv) {
     int n_labels = gaussians.size();
     for (;;) {
         n_labels /= 2;
-        if (n_labels <= 1000) break;
+        if (n_labels <= 10000) break;
 
         cout << "Level " << current_lod << ": " << n_labels << " Gaussians" << endl;
 
@@ -475,12 +485,6 @@ int main(int argc, char **argv) {
             tmp.push_back(g.sh.x);
             tmp.push_back(g.sh.y);
             tmp.push_back(g.sh.z);
-
-            /*tmp.push_back(g.scale.x);
-            tmp.push_back(g.scale.y);
-            tmp.push_back(g.scale.z);
-
-            tmp.push_back(g.opacity);*/
 
             features[i] = tmp;
         }
