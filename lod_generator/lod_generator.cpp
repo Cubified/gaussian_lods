@@ -34,6 +34,7 @@ struct Gaussian {
     int32_t lod;
     bool invalid = false;
 
+    Gaussian() { invalid = true; }
     Gaussian(const float3 &pos,
              const float3 &scale,
              const float4 &rot,
@@ -174,10 +175,10 @@ vector<int> k_medoids(const vector<vector<float>>& data, int k, int max_iters = 
     for (int iter = 0; iter < max_iters; ++iter) {
         bool changed = false;
         
-#pragma omp parallel for
-        for (size_t i = 0; i < n; ++i) {
+        for (size_t i : tq::trange(n)) {
             int best_cluster = 0;
             float best_distance = numeric_limits<float>::max();
+#pragma omp parallel for
             for (int j = 0; j < k; ++j) {
                 float dist = squared_euclidean_distance(data[i], data[medoids[j]]);
                 if (dist < best_distance) {
@@ -190,6 +191,8 @@ vector<int> k_medoids(const vector<vector<float>>& data, int k, int max_iters = 
                 changed = true;
             }
         }
+
+        cout << endl;
         
         if (!changed) break;
         
@@ -234,7 +237,7 @@ vector<int> cluster_gaussians(string method, const vector<vector<float>> &data, 
     return vector<int>();
 }
 
-Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
+Gaussian mean_merge(const vector<Gaussian> &gaussians, int32_t lod = 1) {
     float total_opacity = 0;
     float3 pos = {0, 0, 0};
     float3 scale = {0, 0, 0};
@@ -279,9 +282,7 @@ Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
         */
     }
     if (fabs(total_opacity) < EPS) {
-        Gaussian g = Gaussian(pos, scale, rot, total_opacity, sh, lod);
-        g.invalid = true;
-        return g;
+        return Gaussian();
     }
 
     pos.x /= total_opacity;
@@ -334,6 +335,50 @@ Gaussian merge_gaussians(const vector<Gaussian> &gaussians, int32_t lod = 1) {
     return Gaussian(pos, scale, rot, total_opacity, sh, lod);
 }
 
+Gaussian max_merge(const vector<Gaussian> &gaussians, int32_t lod = 1) {
+    float largest_volume = 0;
+    Gaussian largest_gaussian;
+    for (const auto &g : gaussians) {
+        if (fabs(g.opacity) < EPS) continue;
+
+        Eigen::Quaterniond q(g.rot.x, g.rot.y, g.rot.z, g.rot.w);
+        Eigen::Matrix3d R = q.toRotationMatrix();
+
+        Eigen::Matrix3d cov3D;
+        cov3D <<
+            (g.scale.x * g.scale.x), 0, 0,
+            0, (g.scale.y * g.scale.y), 0,
+            0, 0, (g.scale.z * g.scale.z);
+        cov3D = R.transpose() * cov3D * R;
+
+        float volume = cov3D.determinant();
+        if (volume > largest_volume) {
+            largest_volume = volume;
+            largest_gaussian = g;
+        }
+    }
+
+    return Gaussian(
+        largest_gaussian.pos,
+        largest_gaussian.scale,
+        largest_gaussian.rot,
+        largest_gaussian.opacity,
+        largest_gaussian.sh,
+        lod
+    );
+}
+
+Gaussian merge_gaussians(string method, const vector<Gaussian> &gaussians, int32_t lod = 1) {
+    if (method == "mean") {
+        return mean_merge(gaussians, lod);
+    } else if (method == "max") {
+        return max_merge(gaussians, lod);
+    }
+
+    cerr << "Error: Unrecognized merging algorithm " << method << endl;
+    return Gaussian();
+}
+
 void save_ply(const string &path, const vector<Gaussian> &gaussians) {
     filebuf fb;
     fb.open(path, ios::out | ios::binary);
@@ -379,15 +424,21 @@ void save_ply(const string &path, const vector<Gaussian> &gaussians) {
 
 int main(int argc, char **argv) {
     if (argc < 3) {
-        cout << "Usage: k_means <in.ply> <out.ply> [kmeans|kmedoids]" << endl;
+        cout << "Usage: k_means <in.ply> <out.ply> [kmeans|kmedoids] [mean|max]" << endl;
         return 0;
     }
 
     string input_path = string(argv[1]);
     string output_path = string(argv[2]);
-    string method = string(argc == 3 ? "kmeans" : argv[3]);
+    string cluster_method = string(argc == 3 ? "kmeans" : argv[3]);
+    string merge_method = string(argc == 4 ? "mean" : argv[4]);
 
-    cout << "Loading... ";
+    cout << "<== Generating LODs ==>" << endl;
+    cout << "Clustering method: " << cluster_method << endl;
+    cout << "Merging method: " << merge_method << endl;
+    cout << endl;
+
+    cout << "Loading \"" << input_path << "\"... ";
     auto gaussians = load_ply(input_path);
 
     vector<Gaussian> tmp;
@@ -436,7 +487,7 @@ int main(int argc, char **argv) {
 
         int n_iters = 2;
         cout << "  Clustering (" << n_iters << " iterations)..." << endl;
-        vector<int> labels = cluster_gaussians(method, features, n_labels, n_iters);
+        vector<int> labels = cluster_gaussians(cluster_method, features, n_labels, n_iters);
 
         vector<vector<Gaussian>> clustered_gaussians(n_labels);
         for (int i = 0; i < n_labels; i++) {
@@ -448,14 +499,14 @@ int main(int argc, char **argv) {
 
         cout << "  Merging..." << endl;
         for (int i = 0; i < n_labels; i++) {
-            Gaussian g = merge_gaussians(clustered_gaussians[i], current_lod);
+            Gaussian g = merge_gaussians(merge_method, clustered_gaussians[i], current_lod);
             if (!g.invalid) output_gaussians.push_back(g);
         }
 
         current_lod++;
     }
 
-    cout << "Saving (" << output_gaussians.size() << " Gaussians)..." << endl;
+    cout << "Saving \"" << output_path << "\"... " << output_gaussians.size() << " Gaussians" << endl;
     save_ply(output_path, output_gaussians);
 
     return 0;
