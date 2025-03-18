@@ -3,3 +3,5 @@ __pycache__
 run.sh
 *.ply
 lod_generator/lod_generator
+
+.vscode/

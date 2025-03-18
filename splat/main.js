@@ -1,3 +1,5 @@
+let module;
+
 let cameras = [
     {
         id: 0,
@@ -464,7 +466,7 @@ function createWorker(self) {
             depthIndex[starts0[sizeList[i]]++] = i;
 
         // console.timeEnd("sort");
-
+        // TODO: adjust how many gaussians to render w/ vertexCount?
         lastProj = viewProj;
         self.postMessage({ depthIndex, viewProj, vertexCount }, [
             depthIndex.buffer,
@@ -624,6 +626,7 @@ function createWorker(self) {
                 rgba[3] = 255;
             }
         }
+        // TODO: build tree?
         console.timeEnd("build buffer");
         return [buffer, lodList];
     }
@@ -794,6 +797,8 @@ let defaultViewMatrix = [
 ];
 let viewMatrix = defaultViewMatrix;
 async function main() {
+    module = await LoD_WASM_Module();
+    alert(module.test());
     let carousel = true;
     const params = new URLSearchParams(location.search);
     try {
@@ -1536,7 +1541,7 @@ async function main() {
 
     while (true) {
         const { done, value } = await reader.read();
-        if (done || stopLoading) break;
+        if (done || stopLoading) break; // TODO: notify worker thread to rebuild BVH one last time?
 
         splatData.set(value, bytesRead);
         bytesRead += value.length;
