@@ -915,6 +915,7 @@ async function main() {
     const a_lod = gl.getAttribLocation(program, "lod");
     gl.enableVertexAttribArray(a_lod);
     gl.bindBuffer(gl.ARRAY_BUFFER, lodBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Uint32Array(Array(10000000).fill(0)), gl.STATIC_DRAW);
     gl.vertexAttribIPointer(a_lod, 1, gl.INT, false, 0, 0);
     gl.vertexAttribDivisor(a_lod, 1);
 
