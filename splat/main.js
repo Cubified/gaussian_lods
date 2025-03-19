@@ -307,6 +307,7 @@ function createWorker(self) {
     const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
     let lastProj = [];
     let depthIndex = new Uint32Array();
+    let lodIndex = new Uint32Array();
     let lastVertexCount = 0;
 
     var _floatView = new Float32Array(1);
@@ -466,12 +467,13 @@ function createWorker(self) {
         // console.timeEnd("sort");
 
         lastProj = viewProj;
-        self.postMessage({ depthIndex, viewProj, vertexCount }, [
+        self.postMessage({ depthIndex, lodIndex, viewProj, vertexCount }, [
             depthIndex.buffer,
         ]);
     }
 
     function processPlyBuffer(inputBuffer) {
+        const MAX_LOD_VAL = 999999999;
         const ubuf = new Uint8Array(inputBuffer);
         // 10KB ought to be enough for a header...
         const header = new TextDecoder().decode(ubuf.slice(0, 1024 * 10));
@@ -526,8 +528,6 @@ function createWorker(self) {
         console.time("calculate importance");
         let sizeList = new Float32Array(vertexCount);
         let sizeIndex = new Uint32Array(vertexCount);
-        let lodList = [];
-        let prevLod = -1;
         for (row = 0; row < vertexCount; row++) {
             sizeIndex[row] = row;
             if (!types["scale_0"]) continue;
@@ -537,14 +537,6 @@ function createWorker(self) {
                 Math.exp(attrs.scale_2);
             const opacity = 1 / (1 + Math.exp(-attrs.opacity));
             sizeList[row] = size * opacity;
-
-            if (types["lod"] && attrs.lod > prevLod) {
-                lodList.push(row);
-                prevLod = attrs.lod;
-            }
-        }
-        while (lodList.length < 10) {
-            lodList.push(lodList[lodList.length - 1]);
         }
         console.timeEnd("calculate importance");
 
@@ -559,6 +551,8 @@ function createWorker(self) {
         // IJKL - quaternion/rot (uint8)
         const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
         const buffer = new ArrayBuffer(rowLength * vertexCount);
+
+        lods = [];
 
         console.time("build buffer");
         for (let j = 0; j < vertexCount; j++) {
@@ -623,9 +617,15 @@ function createWorker(self) {
             } else {
                 rgba[3] = 255;
             }
+
+            if (types["lod"]) {
+                lods.push(attrs.lod);
+            } else {
+                lods.push(0);
+            }
         }
         console.timeEnd("build buffer");
-        return [buffer, lodList];
+        return [buffer, lods];
     }
 
     const throttledSort = () => {
@@ -647,9 +647,9 @@ function createWorker(self) {
         if (e.data.ply) {
             vertexCount = 0;
             runSort(viewProj);
-            [buffer, lodList] = processPlyBuffer(e.data.ply);
+            [buffer, lods] = processPlyBuffer(e.data.ply);
             vertexCount = Math.floor(buffer.byteLength / rowLength);
-            postMessage({ buffer, lodList, save: false });
+            postMessage({ buffer, lods, save: false });
         } else if (e.data.buffer) {
             buffer = e.data.buffer;
             vertexCount = e.data.vertexCount;
@@ -663,6 +663,7 @@ function createWorker(self) {
 }
 
 const MAX_N_LODS = 10;
+const MAX_LOD_VAL = 999999999;
 const vertexShaderSource = `
 #version 300 es
 precision highp float;
@@ -677,36 +678,30 @@ uniform highp usampler2D u_texture;
 uniform mat4 projection, view;
 uniform vec2 focal;
 uniform vec2 viewport;
-uniform int u_lodList[MAX_N_LODS];
 uniform int u_lod;
 uniform int u_viewMode;
 
 in vec2 position;
 in int index;
+in int lod;
 
 out vec4 vColor;
 out vec2 vPosition;
 out float vDepth;
 out float vLod;
+out float vIndex;
 out float depth_mode;
 out float should_discard;
 
-const float lod_depths[MAX_N_LODS] = float[MAX_N_LODS](1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 999999.0);
+const float lod_depths[MAX_N_LODS] = float[MAX_N_LODS](0.0, 0.9, 0.95, 0.98, 0.99, 0.999, 0.9999, 0.9999, 0.99999, ${MAX_LOD_VAL}.0);
 
 void main () {
-    int current_lod = 0;
     should_discard = 0.0;
 
     depth_mode = (u_viewMode == 1) ? 1.0 : 0.0;
 
-    for (int i = MAX_N_LODS - 1; i >= 0; i--) {
-        if (u_lodList[i] <= index) {
-            current_lod = i;
-            break;
-        }
-    }
-
-    if (u_viewMode == 2 && current_lod != u_lod) {
+    // Per-LOD view mode
+    if (u_viewMode == 2 && lod != u_lod) {
         DISCARD;
     }
 
@@ -715,15 +710,16 @@ void main () {
     vec4 pos2d = projection * cam;
 
     float clip = 1.2 * pos2d.w;
-    vDepth = pos2d.w / 10.0;
+    vDepth = pos2d.z / pos2d.w;
     if (pos2d.z < -clip || pos2d.x < -clip || pos2d.x > clip || pos2d.y < -clip || pos2d.y > clip) {
         DISCARD;
     }
 
-    if (u_viewMode != 2 && (vDepth > lod_depths[current_lod] || (current_lod > 0 && vDepth <= lod_depths[current_lod - 1]))) {
+    if (u_viewMode == 0 && (vDepth < lod_depths[lod] || (lod >= MAX_N_LODS - 1 || vDepth >= lod_depths[lod + 1]))) {
         DISCARD;
     }
-    vLod = float(current_lod) / float(MAX_N_LODS);
+    vLod = float(lod) / float(MAX_N_LODS);
+    vIndex = float(index) / float(${MAX_LOD_VAL});
 
     uvec4 cov = texelFetch(u_texture, ivec2(((uint(index) & 0x3ffu) << 1) | 1u, uint(index) >> 10), 0);
     vec2 u1 = unpackHalf2x16(cov.x), u2 = unpackHalf2x16(cov.y), u3 = unpackHalf2x16(cov.z);
@@ -767,6 +763,7 @@ in vec4 vColor;
 in vec2 vPosition;
 in float vDepth;
 in float vLod;
+in float vIndex;
 in float depth_mode;
 in float should_discard;
 
@@ -780,7 +777,7 @@ void main () {
     float B = exp(A) * vColor.a;
 
     if (depth_mode > 0.0) {
-        fragColor = vec4(0.0, vDepth, vLod, 1.0);
+        fragColor = vec4(vIndex, vDepth, vLod, 0.5);
     } else {
         fragColor = vec4(B * vColor.rgb, B);
     }
@@ -896,9 +893,6 @@ async function main() {
     var u_textureLocation = gl.getUniformLocation(program, "u_texture");
     gl.uniform1i(u_textureLocation, 0);
 
-    const u_lodList = gl.getUniformLocation(program, "u_lodList");
-    gl.uniform1iv(u_lodList, [0, 999999, 999999, 999999, 999999, 999999, 999999, 999999, 999999, 999999]);
-
     const u_viewMode = gl.getUniformLocation(program, "u_viewMode");
     gl.uniform1i(u_viewMode, viewMode);
 
@@ -911,6 +905,13 @@ async function main() {
     gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
     gl.vertexAttribIPointer(a_index, 1, gl.INT, false, 0, 0);
     gl.vertexAttribDivisor(a_index, 1);
+
+    const lodBuffer = gl.createBuffer();
+    const a_lod = gl.getAttribLocation(program, "lod");
+    gl.enableVertexAttribArray(a_lod);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lodBuffer);
+    gl.vertexAttribIPointer(a_lod, 1, gl.INT, false, 0, 0);
+    gl.vertexAttribDivisor(a_lod, 1);
 
     const resize = () => {
         gl.uniform2fv(u_focal, new Float32Array([camera.fx, camera.fy]));
@@ -938,7 +939,8 @@ async function main() {
         if (e.data.buffer) {
             splatData = new Uint8Array(e.data.buffer);
 
-            gl.uniform1iv(u_lodList, e.data.lodList);
+            gl.bindBuffer(gl.ARRAY_BUFFER, lodBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Uint32Array(e.data.lods), gl.DYNAMIC_DRAW);
 
             if (e.data.save) {
                 const blob = new Blob([splatData.buffer], {
@@ -981,7 +983,7 @@ async function main() {
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, texture);
         } else if (e.data.depthIndex) {
-            const { depthIndex, viewProj } = e.data;
+            const { depthIndex, lodIndex, viewProj } = e.data;
             gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, depthIndex, gl.DYNAMIC_DRAW);
             vertexCount = e.data.vertexCount;

@@ -44,7 +44,7 @@ struct Gaussian {
         : pos(pos), scale(scale), rot(rot), opacity(opacity), sh(sh), lod(lod) {}
 };
 
-vector<Gaussian> load_ply(const string& path) {
+vector<Gaussian> load_ply(const string& path, int lod = 0) {
     ifstream ss(path, ios::binary);
     tinyply::PlyFile file;
     file.parse_header(ss);
@@ -81,7 +81,7 @@ vector<Gaussian> load_ply(const string& path) {
         scales[i].y = exp(scales[i].y);
         scales[i].z = exp(scales[i].z);
 
-        gaussians.emplace_back(verts[i], scales[i], rots[i], opacities[i], shs[i], 0);
+        gaussians.emplace_back(verts[i], scales[i], rots[i], opacities[i], shs[i], lod);
     }
 
     return gaussians;
@@ -401,7 +401,7 @@ void save_ply(const string &path, const vector<Gaussian> &gaussians) {
         float rot_norm = sqrt((g.rot.x * g.rot.x) + (g.rot.y * g.rot.y) + (g.rot.z * g.rot.z) + (g.rot.w * g.rot.w));
 
         float opacity = 0;
-        if ((1.0 / (g.opacity + EPS)) > 0.0) {
+        if ((1.0 / (g.opacity + EPS)) > 1.0) {
             opacity = -log((1.0 / (g.opacity + EPS)) - 1.0);
         }
 
@@ -434,7 +434,7 @@ void save_ply(const string &path, const vector<Gaussian> &gaussians) {
 
 int main(int argc, char **argv) {
     if (argc < 3) {
-        cout << "Usage: k_means <in.ply> <out.ply> [kmeans|kmedoids] [mean|mean_volume|max]" << endl;
+        cout << "Usage: lod_generator <in.ply|merge> <out.ply> [kmeans|kmedoids] [mean|mean_volume|max]" << endl;
         return 0;
     }
 
@@ -443,6 +443,22 @@ int main(int argc, char **argv) {
     string cluster_method = string(argc == 3 ? "kmeans" : argv[3]);
     string merge_method = string(argc == 4 ? "mean" : argv[4]);
 
+    if (input_path == "merge") {
+        vector<Gaussian> gaussians;
+        for (int i = 2; i < argc - 1; i++) {
+            cout << "Loading \"" << argv[i] << "\"... ";
+            auto tmp = load_ply(argv[i], i - 2);
+            cout << tmp.size() << " Gaussians" << endl;
+            gaussians.insert(gaussians.end(), tmp.begin(), tmp.end());
+        }
+
+        string output_path = string(argv[argc - 1]);
+        cout << "Saving \"" << output_path << "\"... ";
+        save_ply(output_path, gaussians);
+        cout << gaussians.size() << " Gaussians" << endl;
+        return 0;
+    }
+
     cout << "<== Generating LODs ==>" << endl;
     cout << "Clustering method: " << cluster_method << endl;
     cout << "Merging method: " << merge_method << endl;
@@ -450,13 +466,6 @@ int main(int argc, char **argv) {
 
     cout << "Loading \"" << input_path << "\"... ";
     auto gaussians = load_ply(input_path);
-
-    vector<Gaussian> tmp;
-    for (int i = 0; i < 100000; i++) {
-        tmp.push_back(gaussians[i]);
-    }
-    gaussians = tmp;
-
     cout << gaussians.size() << " Gaussians" << endl;
     
     vector<Gaussian> output_gaussians;
