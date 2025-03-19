@@ -1,10 +1,10 @@
 # Copyright (C) 2020, Inria
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
-# 
-# This software is free for non-commercial, research and evaluation use 
+#
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
-# 
+#
 # For inquiries contact sibr@inria.fr and/or George.Drettakis@inria.fr
 
 
@@ -31,7 +31,7 @@ target_link_libraries(${PROJECT_NAME}
 else()
 target_link_libraries(${PROJECT_NAME}
 	OpenMP::OpenMP_CXX
-	embree
+	embree3
 # CLUSTER
 #	/data/graphdeco/share/tbb/lib64/libtbb.so
 	sibr_graphics

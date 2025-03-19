@@ -1074,7 +1074,7 @@ async function main() {
             document.getElementById("spinner").style.display = "none";
             gl.uniformMatrix4fv(u_view, false, actualViewMatrix);
             gl.clear(gl.COLOR_BUFFER_BIT);
-            gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
+            gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount / 2);
         } else {
             gl.clear(gl.COLOR_BUFFER_BIT);
             document.getElementById("spinner").style.display = "";

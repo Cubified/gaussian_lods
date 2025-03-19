@@ -56,6 +56,7 @@ function packHalf2x16(x, y) {
 
 function generateTexture() {
     if (!buffer) return;
+    console.time("gentex");
     const f_buffer = new Float32Array(buffer);
     const u_buffer = new Uint8Array(buffer);
 
@@ -122,6 +123,7 @@ function generateTexture() {
         texdata[8 * i + 5] = packHalf2x16(4 * sigma[2], 4 * sigma[3]);
         texdata[8 * i + 6] = packHalf2x16(4 * sigma[4], 4 * sigma[5]);
     }
+    console.timeEnd("gentex");
 
     postMessage({ texdata, texwidth, texheight }, [texdata.buffer]);
 }
@@ -142,53 +144,45 @@ function runSort(viewProj) {
         lastVertexCount = vertexCount;
     }
 
-    // console.time("sort");
-    // let maxDepth = -Infinity;
-    // let minDepth = Infinity;
-    // let sizeList = new Int32Array(vertexCount);
-    // for (let i = 0; i < vertexCount; i++) {
-    //     let depth =
-    //         ((viewProj[2] * f_buffer[8 * i + 0] +
-    //             viewProj[6] * f_buffer[8 * i + 1] +
-    //             viewProj[10] * f_buffer[8 * i + 2]) *
-    //             4096) |
-    //         0;
-    //     sizeList[i] = depth;
-    //     if (depth > maxDepth) maxDepth = depth;
-    //     if (depth < minDepth) minDepth = depth;
-    // }
-
-    // // This is a 16 bit single-pass counting sort
-    // let depthInv = (256 * 256 - 1) / (maxDepth - minDepth);
-    // let counts0 = new Uint32Array(256 * 256);
-    // for (let i = 0; i < vertexCount; i++) {
-    //     sizeList[i] = ((sizeList[i] - minDepth) * depthInv) | 0;
-    //     counts0[sizeList[i]]++;
-    // }
-    // let starts0 = new Uint32Array(256 * 256);
-    // for (let i = 1; i < 256 * 256; i++)
-    //     starts0[i] = starts0[i - 1] + counts0[i - 1];
-    // depthIndex = new Uint32Array(vertexCount);
-    // for (let i = 0; i < vertexCount; i++)
-    //     depthIndex[starts0[sizeList[i]]++] = i;
-
-    // // console.timeEnd("sort");
-    // // TODO: adjust how many gaussians to render w/ vertexCount?
-    let viewProjVec = new module.VectorFloat32();
-    let fBufferVec = new module.VectorFloat32();
-
-    for (let i = 0; i < f_buffer.length; i++) {
-        fBufferVec.push_back(f_buffer[i]);
-    }
-    for (let i = 0; i < viewProj.length; i++) {
-        viewProjVec.push_back(viewProj[i]);
-    }
-    // For f_buffer (assumed to be a Float32Array)
-    let depthIndexVec = module.runSort(viewProjVec, fBufferVec, lastVertexCount, vertexCount);
-    depthIndex = new Uint32Array(vertexCount);
+    console.time("sort");
+    let maxDepth = -Infinity;
+    let minDepth = Infinity;
+    let sizeList = new Int32Array(vertexCount);
     for (let i = 0; i < vertexCount; i++) {
-        depthIndex[i] = depthIndexVec.get(i);
+        let depth =
+            ((viewProj[2] * f_buffer[8 * i + 0] +
+                viewProj[6] * f_buffer[8 * i + 1] +
+                viewProj[10] * f_buffer[8 * i + 2]) *
+                4096) |
+            0;
+        sizeList[i] = depth;
+        if (depth > maxDepth) maxDepth = depth;
+        if (depth < minDepth) minDepth = depth;
     }
+
+    // This is a 16 bit single-pass counting sort
+    let depthInv = (256 * 256 - 1) / (maxDepth - minDepth);
+    let counts0 = new Uint32Array(256 * 256);
+    for (let i = 0; i < vertexCount; i++) {
+        sizeList[i] = ((sizeList[i] - minDepth) * depthInv) | 0;
+        counts0[sizeList[i]]++;
+    }
+    let starts0 = new Uint32Array(256 * 256);
+    for (let i = 1; i < 256 * 256; i++)
+        starts0[i] = starts0[i - 1] + counts0[i - 1];
+    depthIndex = new Uint32Array(vertexCount / 2);
+    for (let i = 0; i < vertexCount / 2; i++)
+        depthIndex[starts0[sizeList[i]]++] = i;
+
+    console.timeEnd("sort");
+    // TODO: adjust how many gaussians to render w/ vertexCount?
+
+    // // For f_buffer (assumed to be a Float32Array)
+    // console.time("sort");
+    // let depthIndexVec = module.runSort(viewProj, f_buffer, lastVertexCount, vertexCount);
+    // depthIndex = new Uint32Array(Array.from({ length: vertexCount }, (_, i) => depthIndexVec.get(i)));
+    // console.timeEnd("sort");
+
     lastProj = viewProj;
     postMessage({ depthIndex, viewProj, vertexCount }, [
         depthIndex.buffer,
@@ -366,6 +360,8 @@ const throttledSort = () => {
         }, 0);
     }
 };
+
+
 
 let sortRunning;
 onmessage = (e) => {

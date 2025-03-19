@@ -9,17 +9,25 @@
 #include <stdexcept>
 #include <algorithm>
 
-struct Vertex {
-    float position[3];
-    float scales[3];
-    uint8_t rgba[4];
-    uint8_t rot[4];
-};
+template<typename T>
+void copyToVector(const emscripten::val &typedArray, std::vector<T> &vec) {
+    unsigned int length = typedArray["length"].as<unsigned int>();
+    emscripten::val heap = emscripten::val::module_property("HEAPU8");
+    emscripten::val memory = heap["buffer"];
+    vec.reserve(length);
 
-std::vector<uint32_t> runSort(std::vector<float> viewProj,
-             std::vector<float> f_buffer,
+    emscripten::val memoryView = typedArray["constructor"].new_(memory, reinterpret_cast<uintptr_t>(vec.data()), length);
+
+    memoryView.call<void>("set", typedArray);
+}
+
+std::vector<uint32_t> runSort(emscripten::val vproj,
+             emscripten::val fbuf,
              size_t lastVertexCount,
              size_t vertexCount) {
+    std::vector<float> viewProj = emscripten::convertJSArrayToNumberVector<float>(vproj);
+    std::vector<float> f_buffer;
+    copyToVector(fbuf, f_buffer);
     int maxDepth = -INT32_MAX;
     int minDepth = INT32_MAX;
     std::vector<uint32_t> depthIndex(vertexCount, 0);
@@ -62,11 +70,8 @@ std::string test() {
 
 EMSCRIPTEN_BINDINGS(wasm_gsplat) {
     emscripten::register_vector<uint8_t>("VectorUint8");
-    emscripten::register_vector<Vertex>("VectorVertex");
+    // emscripten::register_vector<Vertex>("VectorVertex");
     emscripten::register_vector<uint32_t>("VectorUint32vector");
     emscripten::register_vector<float>("VectorFloat32");
     emscripten::function("runSort", &runSort);
-    // emscripten::function("processPlyBuffer", &processPlyBuffer);
-    emscripten::function("test", &test);
-    emscripten::function("test2", &test2);
 }
