@@ -467,6 +467,14 @@ int main(int argc, char **argv) {
     cout << "Loading \"" << input_path << "\"... ";
     auto gaussians = load_ply(input_path);
     cout << gaussians.size() << " Gaussians" << endl;
+
+/*
+    vector<Gaussian> tmp;
+    for (int i = 0; i < 100000; i++) {
+        tmp.push_back(gaussians[i]);
+    }
+    gaussians = tmp;
+*/
     
     vector<Gaussian> output_gaussians;
     for (auto g : gaussians) {
@@ -498,7 +506,8 @@ int main(int argc, char **argv) {
             features[i] = tmp;
         }
 
-        int n_iters = 2;
+        // int n_iters = 2;
+        int n_iters = 1;
         cout << "  Clustering (" << n_iters << " iterations)..." << endl;
         vector<int> labels = cluster_gaussians(cluster_method, features, n_labels, n_iters);
 
