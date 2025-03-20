@@ -794,8 +794,10 @@ let defaultViewMatrix = [
 ];
 let viewMatrix = defaultViewMatrix;
 async function main() {
-    module = await LoD_WASM_Module();
-    // alert(module.test());
+    try {
+        module = await LoD_WASM_Module();
+        // alert(module.test());
+    } catch(e) {}
     let carousel = true;
     const params = new URLSearchParams(location.search);
     try {
@@ -1465,7 +1467,7 @@ async function main() {
         } else {
             document.getElementById("progress").style.display = "none";
         }
-        fps.innerText = Math.round(avgFps) + " fps";
+        fps.innerText = Math.round(avgFps) + " fps" + " " + vertexCount + " gaussians" ;
         if (isNaN(currentCameraIndex)) {
             camid.innerText = "";
         }
