@@ -628,20 +628,32 @@ onmessage = (e) => {
     if (e.data.ply) {
         // This is unused mostly
         vertexCount = 0;
-        let buffer;
+        let plybuffer;
         let lodList;
-        [buffer, lodList] = processPlyBuffer(e.data.ply);
-        vertexCount = Math.floor(buffer.byteLength / rowLength);
-        // TODO: process buffer
-        // bvh = new BoundingVolumeHierarchy(buffer, vertexCount);
-        // buffer = bvh.cloud.toBuffer();
+        [plybuffer, lodList] = processPlyBuffer(e.data.ply);
+        vertexCount = Math.floor(plybuffer.byteLength / rowLength);
+        let arr = new Uint8Array(plybuffer);
+        console.log('buildin\' bvh');
+        bvh = new module.BoundingVolumeHierarchy(arr, vertexCount);
+        arr = undefined;
+        plybuffer = undefined; // force garbage collection
+        console.log('bvh complete');
+        let buftmp = bvh.toBuffer();
+        console.log('buffered');
+        vertexCount = bvh.size();
+        let buffer = new Uint8Array(buftmp.size());
+        for (let i = 0; i < buftmp.size(); i++) {
+            buffer[i] = buftmp.get(i);
+        }
+        console.log('actually buffered');
+        buftmp = undefined; // free up some memory
         if (port) {
             port.postMessage({
-                buffer: buffer,
+                buffer: buffer.buffer,
                 vertexCount: vertexCount
-            }, [buffer]);
+            }, [buffer.buffer]);
         }
-        postMessage({ buffer, lodList, save: false }, [buffer, lodList]);
+        postMessage({ buffer: plybuffer, lodList, save: false }, [plybuffer, lodList]);
     } else if (e.data.buffer) {
         while (!module); // gross but it works
         let arr = new Uint8Array(e.data.buffer);
@@ -659,11 +671,6 @@ onmessage = (e) => {
         }
         console.log('actually buffered');
         buftmp = undefined; // free up some memory
-        // console.log(`size: ${vertexCount}`);
-        // let arr = new Uint8Array(e.data.buffer);
-        // let cloud = new module.GaussianCloud(arr, e.data.vertexCount);
-        // let buftmp = cloud.toBuffer();
-        // let buffer = new Uint8Array(Array.from({ length: arr.length }, (_, i) => buftmp.get(i)));
         if (port) {
             port.postMessage({
                 buffer: buffer.buffer,
