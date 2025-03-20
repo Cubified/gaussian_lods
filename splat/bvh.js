@@ -275,25 +275,23 @@ function MergeGaussian(cloud, i, j) {
     const j_w = cloud.rgba[j][3] * Math.sqrt(cloud.scales[j][0] * cloud.scales[j][0] +
                    cloud.scales[j][1] * cloud.scales[j][1] +
                    cloud.scales[j][2] * cloud.scales[j][2]);
+    const t = i_w / (i_w + j_w);
 
-    let new_pos = [i_w * cloud.positions[i][0] + j_w * cloud.positions[j][0],
-                   i_w * cloud.positions[i][1] + j_w * cloud.positions[j][1],
-                   i_w * cloud.positions[i][2] + j_w * cloud.positions[j][2]];
-    new_pos.map(x => x / (i_w + j_w));
+    let new_pos = [t * cloud.positions[i][0] + (1 - t) * cloud.positions[j][0],
+                   t * cloud.positions[i][1] + (1 - t) * cloud.positions[j][1],
+                   t * cloud.positions[i][2] + (1 - t) * cloud.positions[j][2]];
 
-    let new_rgba = [i_w * cloud.rgba[i][0] + j_w * cloud.rgba[j][0],
-                   i_w * cloud.rgba[i][1] + j_w * cloud.rgba[j][1],
-                   i_w * cloud.rgba[i][2] + j_w * cloud.rgba[j][2],
-                   i_w * cloud.rgba[i][3] + j_w * cloud.rgba[j][3]];
-    new_rgba.map(x => x / (i_w + j_w));
+    let new_rgba = [t * cloud.rgba[i][0] + (1 - t) * cloud.rgba[j][0],
+                   t * cloud.rgba[i][1] + (1 - t) * cloud.rgba[j][1],
+                   t * cloud.rgba[i][2] + (1 - t) * cloud.rgba[j][2],
+                   t * cloud.rgba[i][3] + (1 - t) * cloud.rgba[j][3]];
 
-    let new_rot = slerp(cloud.rotations[i], cloud.rotations[j], i_w / (i_w + j_w));
+    let new_rot = slerp(cloud.rotations[i], cloud.rotations[j], t);
 
     // TODO: increase scale instead of interpolating?
-    let new_scales = [i_w * cloud.scales[i][0] + j_w * cloud.scales[j][0],
-                      i_w * cloud.scales[i][1] + j_w * cloud.scales[j][1],
-                      i_w * cloud.scales[i][2] + j_w * cloud.scales[j][2]];
-    new_scales.map(x => x / (i_w + j_w));
+    let new_scales = [t * cloud.scales[i][0] + (1 - t) * cloud.scales[j][0],
+                      t * cloud.scales[i][1] + (1 - t) * cloud.scales[j][1],
+                      t * cloud.scales[i][2] + (1 - t) * cloud.scales[j][2]];
 
     cloud.positions.push(new_pos);
     cloud.rotations.push(new_rot);
@@ -404,7 +402,7 @@ class BVHNode {
         if (maxz < -1 || minz > 1 || maxx < -1 || minx > 1 || maxy < -1 || miny  > 1) {
             return [];
         }
-        if (!this.left || !this.right || maxx - minx < 0.005 || maxy - miny < 0.005) {
+        if (!this.left || !this.right || maxx - minx < 0.1 || maxy - miny < 0.1) {
             return [this.index];
         } else {
             return this.left.getIndices(indices, viewProj).concat(this.right.getIndices(indices, viewProj));

@@ -1079,11 +1079,10 @@ async function main() {
         const currentFps = 1000 / (now - lastFrame) || 0;
         avgFps = avgFps * 0.9 + currentFps * 0.1;
 
-        if (vertexCount > 0) {
+        if (vertexCount >= 0) {
             document.getElementById("spinner").style.display = "none";
             gl.uniformMatrix4fv(u_view, false, actualViewMatrix);
             gl.clear(gl.COLOR_BUFFER_BIT);
-            console.log(`Drawing ${vertexCount} gaussians`);
             gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
         } else {
             gl.clear(gl.COLOR_BUFFER_BIT);
@@ -1096,7 +1095,7 @@ async function main() {
         } else {
             document.getElementById("progress").style.display = "none";
         }
-        fps.innerText = Math.round(avgFps) + " fps";
+        fps.innerText = Math.round(avgFps) + " fps " + vertexCount + " gaussians";
         if (isNaN(currentCameraIndex)) {
             camid.innerText = "";
         }

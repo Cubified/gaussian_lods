@@ -145,7 +145,6 @@ function runSort(viewProj) {
         lastVertexCount = vertexCount;
     }
 
-    console.time("sort");
     let maxDepth = -Infinity;
     let minDepth = Infinity;
     let vertRender = indices.length;
@@ -176,7 +175,6 @@ function runSort(viewProj) {
     for (let i = 0; i < vertRender; i++)
         depthIndex[starts0[sizeList[i]]++] = indices[i];
 
-    console.timeEnd("sort");
     // TODO: adjust how many gaussians to render w/ vertexCount?
 
     // // For f_buffer (assumed to be a Float32Array)
