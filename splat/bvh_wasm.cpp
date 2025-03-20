@@ -76,6 +76,14 @@ public:
             {maxx, maxy, maxz, 1}
         };
     }
+
+    float surfaceArea() {
+        auto [minx, maxx, miny, maxy, minz, maxz] = bounds;
+        float x = maxx - minx;
+        float y = maxy - miny;
+        float z = maxz - minz;
+        return 2 * (x * y + x * z + y * z);
+    }
 private:
     std::array<float, 6> bounds;
 };
@@ -93,6 +101,10 @@ public:
             parseElement(buffer, i);
         }
         this->vertexCount = vertexCount;
+        positions.shrink_to_fit();
+        scales.shrink_to_fit();
+        rotations.shrink_to_fit();
+        rgba.shrink_to_fit();
     }
 
     GaussianCloud(emscripten::val buftmp, size_t vertexCount) {
@@ -108,6 +120,10 @@ public:
             parseElement(buffer, i);
         }
         this->vertexCount = vertexCount;
+        positions.shrink_to_fit();
+        scales.shrink_to_fit();
+        rotations.shrink_to_fit();
+        rgba.shrink_to_fit();
     }
 
     inline void parseElement(void *buffer, size_t i) {
@@ -156,6 +172,12 @@ public:
             rotP[2] = static_cast<uint8_t>((128 * rotations[i].z()) + 128);
             rotP[3] = static_cast<uint8_t>((128 * rotations[i].w()) + 128);
         }
+        // clear memory TODO: this is a hack, remove this if you ever re-use this code
+        // Browsers limit each tab to ~2GB memory
+        positions = std::vector<Eigen::Vector3f>();
+        scales = std::vector<Eigen::Vector3f>();
+        rotations = std::vector<Eigen::Quaternionf>();
+        rgba = std::vector<Eigen::Vector4i>();
         return buffervec;
     }
     std::vector<Eigen::Vector3f> positions;
@@ -251,6 +273,117 @@ size_t MergeGaussian(GaussianCloud &cloud, size_t i, size_t j) {
     return cloud.positions.size() - 1;
 }
 
+// size_t findOptimalSplit(
+//     const GaussianCloud &cloud,
+//     std::vector<size_t> &indices,
+//     size_t l,
+//     size_t r,
+//     int axis
+// ) {
+//     size_t n = r - l;
+//     std::vector<AABB> leftBounds(n);
+//     std::vector<AABB> rightBounds(n);
+
+//     leftBounds[0] = GaussianAABB(cloud, indices[l]);
+//     for (size_t i = 1; i < n; ++i) {
+//         AABB currentAABB = GaussianAABB(cloud, indices[l + i]);
+//         leftBounds[i] = leftBounds[i - 1].merge(currentAABB);
+//     }
+
+//     rightBounds[n - 1] = GaussianAABB(cloud, indices[r - 1]);
+//     for (int i = static_cast<int>(n) - 2; i >= 0; --i) {
+//         AABB currentAABB = GaussianAABB(cloud, indices[l + i]);
+//         rightBounds[i] = rightBounds[i + 1].merge(currentAABB);
+//     }
+
+//     float bestCost = std::numeric_limits<float>::max();
+//     size_t bestSplit = l;
+//     for (size_t i = 0; i < n - 1; ++i) {
+//         float leftCost = leftBounds[i].surfaceArea() * (i + 1);
+//         float rightCost = rightBounds[i + 1].surfaceArea() * (n - i - 1);
+//         float cost = leftCost + rightCost;
+//         if (cost < bestCost) {
+//             bestCost = cost;
+//             bestSplit = l + i + 1;
+//         }
+//     }
+
+//     return bestSplit;
+// }
+
+// Gpt generated SAH cus im lazy as fuck
+constexpr int NUM_BINS = 10;
+size_t findOptimalSplit(
+    const GaussianCloud &cloud,
+    std::vector<size_t> &indices,
+    size_t l,
+    size_t r,
+    int axis
+) {
+    size_t n = r - l;
+    if (n <= 1) return l;
+
+    // Step 1: Compute global bounds
+    AABB globalBounds = GaussianAABB(cloud, indices[l]);
+    for (size_t i = l + 1; i < r; ++i) {
+        auto cur = GaussianAABB(cloud, indices[i]);
+        globalBounds = globalBounds.merge(cur);
+    }
+
+    // Step 2: Sort based on axis
+    std::nth_element(indices.begin() + l, indices.begin() + l + n / 2, indices.begin() + r,
+        [&](size_t a, size_t b) {
+            float va = (axis == 0) ? cloud.positions[a][0] : (axis == 1) ? cloud.positions[a][1] : cloud.positions[a][2];
+            float vb = (axis == 0) ? cloud.positions[b][0] : (axis == 1) ? cloud.positions[b][1] : cloud.positions[b][2];
+            return va < vb;
+        });
+
+    // Step 3: Bin-based SAH calculation
+    int binSize = n / NUM_BINS;
+    std::vector<AABB> leftBounds(NUM_BINS), rightBounds(NUM_BINS);
+
+    // Left prefix bounds
+    leftBounds[0] = GaussianAABB(cloud, indices[l]);
+    for (int i = 1; i < NUM_BINS; ++i) {
+        size_t idx = l + i * binSize;
+        auto cur = GaussianAABB(cloud, indices[idx]);
+        leftBounds[i] = leftBounds[i - 1].merge(cur);
+    }
+
+    // Right suffix bounds
+    rightBounds[NUM_BINS - 1] = GaussianAABB(cloud, indices[r - 1]);
+    for (int i = NUM_BINS - 2; i >= 0; --i) {
+        size_t idx = l + (i + 1) * binSize;
+        auto cur = GaussianAABB(cloud, indices[idx]);
+        rightBounds[i] = rightBounds[i + 1].merge(cur);
+    }
+
+    // Step 4: Compute SAH for each bin
+    float bestCost = std::numeric_limits<float>::infinity();
+    size_t bestSplit = l;
+
+    for (int i = 0; i < NUM_BINS - 1; ++i) {
+        float leftSA = leftBounds[i].surfaceArea();
+        float rightSA = rightBounds[i + 1].surfaceArea();
+
+        int leftCount = (i + 1) * binSize;
+        int rightCount = n - leftCount;
+
+        float cost = leftCount * leftSA + rightCount * rightSA;
+        if (cost < bestCost) {
+            bestCost = cost;
+            bestSplit = l + (i + 1) * binSize;
+        }
+    }
+
+    // Step 5: Fallback to median split if SAH is unstable
+    if (bestSplit == l) {
+        bestSplit = l + n / 2;
+    }
+
+    return bestSplit;
+}
+
 class BVHNode {
 public:
     BVHNode(
@@ -271,8 +404,9 @@ public:
         sort(indices.begin() + l, indices.begin() + r, [&](const size_t &l, const size_t &r) {
             return cloud.positions[l][axis] < cloud.positions[r][axis];
         });
-
         size_t mid = (l + r) / 2;
+        // surface area heuristic tree creationt is too fuckin slow for bigger scenes
+        // size_t mid = findOptimalSplit(cloud, indices, l, r, axis);
         if (mid - l > 0) {
             left.reset(new BVHNode(cloud, indices, l, mid, axis + 1));
         }
@@ -304,15 +438,27 @@ public:
             maxz = std::max(maxz, nc.z());
         }
 
-        if (maxz < -1 || minz > 1 || maxx < -1.2 || minx > 1.2 || maxy < -1.2 || miny  > 1.2) {
-            return;
-        }
-
-        if (!left || !right || maxx - minx < 0.02 || maxy - miny < 0.02) {
-            indices.push_back(index);
+        if (minz < 1 && maxz > -1 && minx < 1 && maxx > -1 && miny < 1 && maxy > -1) {
+            if (!left || !right || maxx - minx < 0.01 || maxy - miny < 0.01) {
+                indices.push_back(index);
+            } else {
+                left->getIndices(indices, viewProj);
+                right->getIndices(indices, viewProj);
+            }
+        } else if (minz < 1.5 && maxz > -1.5 && minx < 1.5 && maxx > -1.5 && miny < 1.5 && maxy > -1.5) {
+            if (!left || !right || maxx - minx < 0.25 || maxy - miny < 0.25) {
+                indices.push_back(index);
+            } else {
+                left->getIndices(indices, viewProj);
+                right->getIndices(indices, viewProj);
+            }
         } else {
-            left->getIndices(indices, viewProj);
-            right->getIndices(indices, viewProj);
+            if (!left || !right || maxx - minx < 0.7 || maxy - miny < 0.7) {
+                indices.push_back(index);
+            } else {
+                left->getIndices(indices, viewProj);
+                right->getIndices(indices, viewProj);
+            }
         }
     }
     size_t index;
@@ -339,6 +485,10 @@ public:
         root.reset(new BVHNode(cloud, indices, 0, vertexCount, 0));
         cloud.vertexCount = cloud.positions.size();
         this->vertexCount = cloud.positions.size(); // TODO: cloud.vertexcount is not updated
+        cloud.positions.shrink_to_fit();
+        cloud.scales.shrink_to_fit();
+        cloud.rotations.shrink_to_fit();
+        cloud.rgba.shrink_to_fit();
     }
 
     std::vector<size_t> getIndices(Eigen::Matrix4f viewProj) {

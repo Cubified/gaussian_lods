@@ -647,6 +647,7 @@ onmessage = (e) => {
         let arr = new Uint8Array(e.data.buffer);
         console.log('buildin\' bvh');
         bvh = new module.BoundingVolumeHierarchy(arr, e.data.vertexCount);
+        arr = undefined;
         e.data.buffer = undefined; // force garbage collection
         console.log('bvh complete');
         let buftmp = bvh.toBuffer();
