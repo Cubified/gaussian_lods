@@ -309,8 +309,12 @@ function createWorker(self) {
     const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
     let lastProj = [];
     let depthIndex = new Uint32Array();
-    let lodIndex = new Uint32Array();
     let lastVertexCount = 0;
+    let lods = [];
+
+    const MAX_N_LODS = 10;
+    const MAX_LOD_VAL = 999999999;
+    const lodDepths = [0, 20000, 25000, 30000, 40000, 50000, 60000, 70000, 80000, MAX_LOD_VAL];
 
     var _floatView = new Float32Array(1);
     var _int32View = new Int32Array(_floatView.buffer);
@@ -422,6 +426,10 @@ function createWorker(self) {
 
     function runSort(viewProj) {
         if (!buffer) return;
+
+        // Somehow get LODs for each vertex
+        // When accumulating sizeList, cull vertices based on LOD and depth
+
         const f_buffer = new Float32Array(buffer);
         if (lastVertexCount == vertexCount) {
             let dot =
@@ -440,6 +448,8 @@ function createWorker(self) {
         let maxDepth = -Infinity;
         let minDepth = Infinity;
         let sizeList = new Int32Array(vertexCount);
+        let indexList = new Int32Array(vertexCount);
+        let visibleGaussians = 0;
         for (let i = 0; i < vertexCount; i++) {
             let depth =
                 ((viewProj[2] * f_buffer[8 * i + 0] +
@@ -447,29 +457,33 @@ function createWorker(self) {
                     viewProj[10] * f_buffer[8 * i + 2]) *
                     4096) |
                 0;
-            sizeList[i] = depth;
-            if (depth > maxDepth) maxDepth = depth;
-            if (depth < minDepth) minDepth = depth;
+            const lod = lods[i];
+            // TODO: Add static/depth view modes
+            if (lod === undefined || (depth < lodDepths[lod] || (lod >= MAX_N_LODS - 1 || lod >= lodDepths[lod + 1]))) {
+                sizeList[visibleGaussians] = depth;
+                indexList[visibleGaussians++] = i;
+                if (depth > maxDepth) maxDepth = depth;
+                if (depth < minDepth) minDepth = depth;
+            }
         }
 
         // This is a 16 bit single-pass counting sort
         let depthInv = (256 * 256 - 1) / (maxDepth - minDepth);
         let counts0 = new Uint32Array(256 * 256);
-        for (let i = 0; i < vertexCount; i++) {
+        for (let i = 0; i < visibleGaussians; i++) {
             sizeList[i] = ((sizeList[i] - minDepth) * depthInv) | 0;
             counts0[sizeList[i]]++;
         }
         let starts0 = new Uint32Array(256 * 256);
         for (let i = 1; i < 256 * 256; i++)
             starts0[i] = starts0[i - 1] + counts0[i - 1];
-        depthIndex = new Uint32Array(vertexCount);
-        for (let i = 0; i < vertexCount; i++)
-            depthIndex[starts0[sizeList[i]]++] = i;
+        depthIndex = new Uint32Array(visibleGaussians);
+        for (let i = 0; i < visibleGaussians; i++)
+            depthIndex[starts0[sizeList[i]]++] = indexList[i];
 
         // console.timeEnd("sort");
-        // TODO: adjust how many gaussians to render w/ vertexCount?
         lastProj = viewProj;
-        self.postMessage({ depthIndex, lodIndex, viewProj, vertexCount }, [
+        self.postMessage({ depthIndex, viewProj, vertexCount: visibleGaussians }, [
             depthIndex.buffer,
         ]);
     }
@@ -665,64 +679,32 @@ function createWorker(self) {
     };
 }
 
-const MAX_N_LODS = 10;
-const MAX_LOD_VAL = 999999999;
 const vertexShaderSource = `
 #version 300 es
 precision highp float;
 precision highp int;
 
-#define MAX_N_LODS ${MAX_N_LODS}
-#define DISCARD gl_Position = vec4(0.0, 0.0, 2.0, 1.0); \
-    should_discard = 1.0; \
-    return
-
 uniform highp usampler2D u_texture;
 uniform mat4 projection, view;
 uniform vec2 focal;
 uniform vec2 viewport;
-uniform int u_lod;
-uniform int u_viewMode;
 
 in vec2 position;
 in int index;
-in int lod;
 
 out vec4 vColor;
 out vec2 vPosition;
-out float vDepth;
-out float vLod;
-out float vIndex;
-out float depth_mode;
-out float should_discard;
-
-const float lod_depths[MAX_N_LODS] = float[MAX_N_LODS](0.0, 0.9, 0.95, 0.98, 0.99, 0.999, 0.9999, 0.9999, 0.99999, ${MAX_LOD_VAL}.0);
 
 void main () {
-    should_discard = 0.0;
-
-    depth_mode = (u_viewMode == 1) ? 1.0 : 0.0;
-
-    // Per-LOD view mode
-    if (u_viewMode == 2 && lod != u_lod) {
-        DISCARD;
-    }
-
     uvec4 cen = texelFetch(u_texture, ivec2((uint(index) & 0x3ffu) << 1, uint(index) >> 10), 0);
     vec4 cam = view * vec4(uintBitsToFloat(cen.xyz), 1);
     vec4 pos2d = projection * cam;
 
     float clip = 1.2 * pos2d.w;
-    vDepth = pos2d.z / pos2d.w;
     if (pos2d.z < -clip || pos2d.x < -clip || pos2d.x > clip || pos2d.y < -clip || pos2d.y > clip) {
-        DISCARD;
+        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+        return;
     }
-
-    if (u_viewMode == 0 && (vDepth < lod_depths[lod] || (lod >= MAX_N_LODS - 1 || vDepth >= lod_depths[lod + 1]))) {
-        DISCARD;
-    }
-    vLod = float(lod) / float(MAX_N_LODS);
-    vIndex = float(index) / float(${MAX_LOD_VAL});
 
     uvec4 cov = texelFetch(u_texture, ivec2(((uint(index) & 0x3ffu) << 1) | 1u, uint(index) >> 10), 0);
     vec2 u1 = unpackHalf2x16(cov.x), u2 = unpackHalf2x16(cov.y), u3 = unpackHalf2x16(cov.z);
@@ -764,26 +746,14 @@ precision highp float;
 
 in vec4 vColor;
 in vec2 vPosition;
-in float vDepth;
-in float vLod;
-in float vIndex;
-in float depth_mode;
-in float should_discard;
 
 out vec4 fragColor;
 
 void main () {
-    if (should_discard > 0.0) discard;
-
     float A = -dot(vPosition, vPosition);
     if (A < -4.0) discard;
     float B = exp(A) * vColor.a;
-
-    if (depth_mode > 0.0) {
-        fragColor = vec4(vIndex, vDepth, vLod, 0.5);
-    } else {
-        fragColor = vec4(B * vColor.rgb, B);
-    }
+    fragColor = vec4(B * vColor.rgb, B);
 }
 
 `.trim();
@@ -794,10 +764,6 @@ let defaultViewMatrix = [
 ];
 let viewMatrix = defaultViewMatrix;
 async function main() {
-    try {
-        module = await LoD_WASM_Module();
-        alert(module.test());
-    } catch(e) {}
     let carousel = true;
     const params = new URLSearchParams(location.search);
     try {
@@ -913,14 +879,6 @@ async function main() {
     gl.vertexAttribIPointer(a_index, 1, gl.INT, false, 0, 0);
     gl.vertexAttribDivisor(a_index, 1);
 
-    const lodBuffer = gl.createBuffer();
-    const a_lod = gl.getAttribLocation(program, "lod");
-    gl.enableVertexAttribArray(a_lod);
-    gl.bindBuffer(gl.ARRAY_BUFFER, lodBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Uint32Array(Array(10000000).fill(0)), gl.STATIC_DRAW);
-    gl.vertexAttribIPointer(a_lod, 1, gl.INT, false, 0, 0);
-    gl.vertexAttribDivisor(a_lod, 1);
-
     const resize = () => {
         gl.uniform2fv(u_focal, new Float32Array([camera.fx, camera.fy]));
 
@@ -946,9 +904,6 @@ async function main() {
     worker.onmessage = (e) => {
         if (e.data.buffer) {
             splatData = new Uint8Array(e.data.buffer);
-
-            gl.bindBuffer(gl.ARRAY_BUFFER, lodBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, new Uint32Array(e.data.lods), gl.DYNAMIC_DRAW);
 
             if (e.data.save) {
                 const blob = new Blob([splatData.buffer], {
@@ -991,7 +946,7 @@ async function main() {
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, texture);
         } else if (e.data.depthIndex) {
-            const { depthIndex, lodIndex, viewProj } = e.data;
+            const { depthIndex, viewProj } = e.data;
             gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, depthIndex, gl.DYNAMIC_DRAW);
             vertexCount = e.data.vertexCount;
