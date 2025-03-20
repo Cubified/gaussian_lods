@@ -15,13 +15,6 @@ class AABB {
         this.bounds = [minx, maxx, miny, maxy, minz, maxz];
     }
 
-    /**
-     *
-     * @param {Array<number>} bounds
-     */
-    constructor(bounds) {
-        this.bounds = bounds;
-    }
 
     minx() { return this.bounds[0]; }
     maxx() { return this.bounds[1]; }
@@ -56,9 +49,9 @@ class AABB {
  * @returns {AABB} Merged bounding box
  */
 function MergeAABB(a, b) {
-    return AABB(Math.min(a.minx, b.minx), Math.max(a.maxx, b.maxx),
-                Math.min(a.miny, b.miny), Math.max(a.miny, a.maxy),
-                Math.min(a.minz, b.minz), Math.max(a.maxz, b.maxz));
+    return new AABB(Math.min(a.minx(), b.minx()), Math.max(a.maxx(), b.maxx()),
+                Math.min(a.miny(), b.miny()), Math.max(a.miny(), a.maxy()),
+                Math.min(a.minz(), b.minz()), Math.max(a.maxz(), b.maxz()));
 }
 
 class GaussianCloud {
@@ -103,12 +96,54 @@ class GaussianCloud {
             f_buffer[8 * i + 3 + 1],
             f_buffer[8 * i + 3 + 2],
         ]);
+        // this.rotations.push([
+        //     (u_buffer[32 * i + 28 + 0]),
+        //     (u_buffer[32 * i + 28 + 1]),
+        //     (u_buffer[32 * i + 28 + 2]),
+        //     (u_buffer[32 * i + 28 + 3]),
+        // ]);
         this.rotations.push([
             (u_buffer[32 * i + 28 + 0] - 128) / 128,
             (u_buffer[32 * i + 28 + 1] - 128) / 128,
             (u_buffer[32 * i + 28 + 2] - 128) / 128,
             (u_buffer[32 * i + 28 + 3] - 128) / 128,
         ]);
+    }
+
+    /**
+     * Converts the gaussian cloud to a buffer in the format worker.js likes
+     * @returns {ArrayBuffer}
+     */
+    toBuffer() {
+        // Copied from worker.js
+        // 6*4 + 4 + 4 = 8*4
+        // XYZ - Position (Float32)
+        // XYZ - Scale (Float32)
+        // RGBA - colors (uint8)
+        // IJKL - quaternion/rot (uint8)
+        const vertexCount = this.positions.length;
+        const buffer = new ArrayBuffer(rowLength * vertexCount);
+
+        for (let i = 0; i < vertexCount; i++) {
+            const position = new Float32Array(buffer, i * rowLength, 3);
+            const scales = new Float32Array(buffer, i * rowLength + 4 * 3, 3);
+            const rgba = new Uint8ClampedArray(
+                buffer,
+                i * rowLength + 4 * 3 + 4 * 3,
+                4,
+            );
+            const rot = new Uint8ClampedArray(
+                buffer,
+                i * rowLength + 4 * 3 + 4 * 3 + 4,
+                4,
+            );
+
+            for (let j = 0; j < 3; j++) position[j] = this.positions[i][j];
+            for (let j = 0; j < 4; j++) rgba[j] = this.rgba[i][j];
+            for (let j = 0; j < 3; j++) scales[j] = this.scales[i][j];
+            for (let j = 0; j < 4; j++) rot[j] = (this.rotations[i][j] * 128) + 128 | 0;
+        }
+        return buffer;
     }
 }
 
@@ -252,7 +287,7 @@ function MergeGaussian(cloud, i, j) {
                    i_w * cloud.rgba[i][3] + j_w * cloud.rgba[j][3]];
     new_rgba.map(x => x / (i_w + j_w));
 
-    let new_rot = slerp(cloud[i].rotations, cloud[j].rotations, i_w / (i_w + j_w));
+    let new_rot = slerp(cloud.rotations[i], cloud.rotations[j], i_w / (i_w + j_w));
 
     // TODO: increase scale instead of interpolating?
     let new_scales = [i_w * cloud.scales[i][0] + j_w * cloud.scales[j][0],
@@ -264,21 +299,20 @@ function MergeGaussian(cloud, i, j) {
     cloud.rotations.push(new_rot);
     cloud.rgba.push(new_rgba);
     cloud.scales.push(new_scales);
-    return cloud.length - 1;
-
+    return cloud.positions.length - 1;
 }
 
-/**
+/**37
  *
  * @param {Array<number>} viewProj
  * @param {Array<number>} vec
  * @returns
  */
-function multiplyVec(viewProj, vec) {
-    let tmp = [viewProj[0] * vec[0] + viewProj[4] * vec[1] + viewProj[8] * vec[2] + viewProj[12] * vec[3],
-               viewProj[1] * vec[0] + viewProj[5] * vec[1] + viewProj[9] * vec[2] + viewProj[13] * vec[3],
-               viewProj[2] * vec[0] + viewProj[6] * vec[1] + viewProj[10] * vec[2] + viewProj[14] * vec[3],
-               viewProj[3] * vec[0] + viewProj[7] * vec[1] + viewProj[11] * vec[2] + viewProj[15] * vec[3]]
+function multiplyVec43(viewProj, vec) {
+    let tmp = [viewProj[0] * vec[0] + viewProj[4] * vec[1] + viewProj[8] * vec[2] + viewProj[12],
+               viewProj[1] * vec[0] + viewProj[5] * vec[1] + viewProj[9] * vec[2] + viewProj[13],
+               viewProj[2] * vec[0] + viewProj[6] * vec[1] + viewProj[10] * vec[2] + viewProj[14],
+               viewProj[3] * vec[0] + viewProj[7] * vec[1] + viewProj[11] * vec[2] + viewProj[15]];
     return tmp;
 }
 
@@ -292,13 +326,13 @@ function dehomogenize(vec) {
         return vec;
     }
     if (vec[3] !== 0) {
-        tmp[0] /= tmp[3];
-        tmp[1] /= tmp[3];
-        tmp[2] /= tmp[3];
-        tmp[3] = 1;
-        return tmp;
+        vec[0] /= vec[3];
+        vec[1] /= vec[3];
+        vec[2] /= vec[3];
+        vec[3] = 1;
+        return vec;
     }
-    return tmp;
+    return vec;
 }
 
 class BVHNode {
@@ -321,13 +355,22 @@ class BVHNode {
         indices.sort((a, b) => {
             cloud.positions[a][axis] - cloud.positions[b][axis];
         });
-        let leftHalf = indices.slice(0, indices.length / 2);
-        let rightHalf = indices.slice(indices.length / 2, -1);
-        this.left = new BVHNode(cloud, leftHalf, axis + 1);
-        this.right = new BVHNode(cloud, rightHalf, axis + 1);
 
-        this.bbox = MergeAABB(this.left.bbox, this.right.bbox);
-        this.index = MergeGaussian(cloud, this.left.index, this.right.index);
+        let leftHalf = indices.slice(0, indices.length / 2);
+        let rightHalf = indices.slice(indices.length / 2);
+        if (leftHalf.length > 0) {
+            this.left = new BVHNode(cloud, leftHalf, axis + 1);
+        }
+        if (rightHalf.length > 0) {
+            this.right = new BVHNode(cloud, rightHalf, axis + 1);
+        }
+
+
+        if (this.left && this.right) {
+            this.bbox = MergeAABB(this.left.bbox, this.right.bbox);
+            this.index = MergeGaussian(cloud, this.left.index, this.right.index);
+        }
+
     }
 
     /**
@@ -347,22 +390,24 @@ class BVHNode {
         let maxz = -Infinity;
         for (let i = 0; i < 8; i++) {
             let vec = [vertices[i * 3 + 0], vertices[i * 3 + 1], vertices[i * 3 + 2]];
-            let pvec = dehomogenize(multiplyVec(viewProj, vec));
+            let pvec = dehomogenize(multiplyVec43(viewProj, vec));
             minx = Math.min(minx, pvec[0]);
             maxx = Math.max(maxx, pvec[0]);
             miny = Math.min(miny, pvec[1]);
             maxy = Math.max(maxy, pvec[1]);
             minz = Math.min(minz, pvec[2]);
-            maxz = Math.min(maxz, pvec[2]);
+            maxz = Math.max(maxz, pvec[2]);
         }
-        if (maxz < -1 || minz > 1) {
-            return;
+
+        // Thingy not in view, don't bother.
+        // TODO: this WILL cause artifacts on edges when the camera rotates, relax these constraints later
+        if (maxz < -1 || minz > 1 || maxx < -1 || minx > 1 || maxy < -1 || miny  > 1) {
+            return [];
         }
         if (!this.left || !this.right || maxx - minx < 0.005 || maxy - miny < 0.005) {
-            indices.push(this.index);
+            return [this.index];
         } else {
-            this.left.intersect(indices, viewProj);
-            this.right.intersect(indices, viewProj);
+            return this.left.getIndices(indices, viewProj).concat(this.right.getIndices(indices, viewProj));
         }
     }
 }
@@ -374,8 +419,11 @@ class BoundingVolumeHierarchy {
      */
     constructor(buffer, vertexCount) {
         this.cloud = new GaussianCloud(buffer, vertexCount);
-        let indices = Array.from(0, vertexCount);
+        let indices = [...Array(vertexCount).keys()];
+        console.log("start building");
         this.root = new BVHNode(this.cloud, indices, 0);
+        console.log("done building");
+        this.vertexCount = this.cloud.positions.length;
     }
 
     /**
@@ -387,4 +435,222 @@ class BoundingVolumeHierarchy {
     }
 }
 
-export * from 'bvh';
+let bvh;
+let port;
+let vertexCount = 0;
+const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
+
+function processPlyBuffer(inputBuffer) {
+    const ubuf = new Uint8Array(inputBuffer);
+    // 10KB ought to be enough for a header...
+    const header = new TextDecoder().decode(ubuf.slice(0, 1024 * 10));
+    const header_end = "end_header\n";
+    const header_end_index = header.indexOf(header_end);
+    if (header_end_index < 0)
+        throw new Error("Unable to read .ply file header");
+    const vertexCount = parseInt(/element vertex (\d+)\n/.exec(header)[1]);
+    console.log("Vertex Count", vertexCount);
+    let row_offset = 0,
+        offsets = {},
+        types = {};
+    const TYPE_MAP = {
+        double: "getFloat64",
+        int: "getInt32",
+        uint: "getUint32",
+        float: "getFloat32",
+        short: "getInt16",
+        ushort: "getUint16",
+        uchar: "getUint8",
+    };
+    for (let prop of header
+        .slice(0, header_end_index)
+        .split("\n")
+        .filter((k) => k.startsWith("property "))) {
+        const [p, type, name] = prop.split(" ");
+        const arrayType = TYPE_MAP[type] || "getInt8";
+        types[name] = arrayType;
+        offsets[name] = row_offset;
+        row_offset += parseInt(arrayType.replace(/[^\d]/g, "")) / 8;
+    }
+    console.log("Bytes per row", row_offset, types, offsets);
+
+    let dataView = new DataView(
+        inputBuffer,
+        header_end_index + header_end.length,
+    );
+    let row = 0;
+    const attrs = new Proxy(
+        {},
+        {
+            get(target, prop) {
+                if (!types[prop]) throw new Error(prop + " not found");
+                return dataView[types[prop]](
+                    row * row_offset + offsets[prop],
+                    true,
+                );
+            },
+        },
+    );
+
+    console.time("calculate importance");
+    let sizeList = new Float32Array(vertexCount);
+    let sizeIndex = new Uint32Array(vertexCount);
+    let lodList = [];
+    let prevLod = -1;
+    for (row = 0; row < vertexCount; row++) {
+        sizeIndex[row] = row;
+        if (!types["scale_0"]) continue;
+        const size =
+            Math.exp(attrs.scale_0) *
+            Math.exp(attrs.scale_1) *
+            Math.exp(attrs.scale_2);
+        const opacity = 1 / (1 + Math.exp(-attrs.opacity));
+        sizeList[row] = size * opacity;
+
+        if (types["lod"] && attrs.lod > prevLod) {
+            lodList.push(row);
+            prevLod = attrs.lod;
+        }
+    }
+    while (lodList.length < 10) {
+        lodList.push(lodList[lodList.length - 1]);
+    }
+    console.timeEnd("calculate importance");
+
+    console.time("sort");
+    sizeIndex.sort((b, a) => sizeList[a] - sizeList[b]);
+    console.timeEnd("sort");
+
+    // 6*4 + 4 + 4 = 8*4
+    // XYZ - Position (Float32)
+    // XYZ - Scale (Float32)
+    // RGBA - colors (uint8)
+    // IJKL - quaternion/rot (uint8)
+    const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
+    const buffer = new ArrayBuffer(rowLength * vertexCount);
+
+    console.time("build buffer");
+    for (let j = 0; j < vertexCount; j++) {
+        row = sizeIndex[j];
+
+        const position = new Float32Array(buffer, j * rowLength, 3);
+        const scales = new Float32Array(buffer, j * rowLength + 4 * 3, 3);
+        const rgba = new Uint8ClampedArray(
+            buffer,
+            j * rowLength + 4 * 3 + 4 * 3,
+            4,
+        );
+        const rot = new Uint8ClampedArray(
+            buffer,
+            j * rowLength + 4 * 3 + 4 * 3 + 4,
+            4,
+        );
+
+        if (types["scale_0"]) {
+            const qlen = Math.sqrt(
+                attrs.rot_0 ** 2 +
+                    attrs.rot_1 ** 2 +
+                    attrs.rot_2 ** 2 +
+                    attrs.rot_3 ** 2,
+            );
+
+            rot[0] = (attrs.rot_0 / qlen) * 128 + 128;
+            rot[1] = (attrs.rot_1 / qlen) * 128 + 128;
+            rot[2] = (attrs.rot_2 / qlen) * 128 + 128;
+            rot[3] = (attrs.rot_3 / qlen) * 128 + 128;
+
+            scales[0] = Math.exp(attrs.scale_0);
+            scales[1] = Math.exp(attrs.scale_1);
+            scales[2] = Math.exp(attrs.scale_2);
+        } else {
+            scales[0] = 0.01;
+            scales[1] = 0.01;
+            scales[2] = 0.01;
+
+            rot[0] = 255;
+            rot[1] = 0;
+            rot[2] = 0;
+            rot[3] = 0;
+        }
+
+        position[0] = attrs.x;
+        position[1] = attrs.y;
+        position[2] = attrs.z;
+
+        if (types["f_dc_0"]) {
+            const SH_C0 = 0.28209479177387814;
+            rgba[0] = (0.5 + SH_C0 * attrs.f_dc_0) * 255;
+            rgba[1] = (0.5 + SH_C0 * attrs.f_dc_1) * 255;
+            rgba[2] = (0.5 + SH_C0 * attrs.f_dc_2) * 255;
+        } else {
+            rgba[0] = attrs.red;
+            rgba[1] = attrs.green;
+            rgba[2] = attrs.blue;
+        }
+        if (types["opacity"]) {
+            rgba[3] = (1 / (1 + Math.exp(-attrs.opacity))) * 255;
+        } else {
+            rgba[3] = 255;
+        }
+    }
+    // TODO: build tree?
+    console.timeEnd("build buffer");
+    return [buffer, lodList];
+}
+
+let indicesRunning = false;
+
+const throttledIndices = (view) => {
+    // if (port) {
+    if (!indicesRunning && bvh && port) {
+        indicesRunning = true;
+        let lastView = view;
+        console.log("starting indices");
+        let indices = bvh.getIndices(view);
+        port.postMessage({ indices: indices });
+        console.log("finished indices");
+
+        setTimeout(() => {
+            indicesRunning = false;
+            if (lastView !== view) {
+                throttledIndices();
+            }
+        }, 0)
+    }
+}
+
+onmessage = (e) => {
+    if (e.data.ply) {
+        vertexCount = 0;
+        let buffer;
+        let lodList;
+        [buffer, lodList] = processPlyBuffer(e.data.ply);
+        vertexCount = Math.floor(buffer.byteLength / rowLength);
+        // TODO: process buffer
+        // bvh = new BoundingVolumeHierarchy(buffer, vertexCount);
+        // buffer = bvh.cloud.toBuffer();
+        if (port) {
+            port.postMessage({
+                buffer: buffer,
+                vertexCount: vertexCount
+            }, [buffer]);
+        }
+        postMessage({ buffer, lodList, save: false }, [buffer, lodList]);
+    } else if (e.data.buffer) {
+        bvh = new BoundingVolumeHierarchy(e.data.buffer, e.data.vertexCount);
+        let buffer = bvh.cloud.toBuffer();
+        if (port) {
+            port.postMessage({
+                buffer: buffer,
+                vertexCount: bvh.vertexCount
+            }, [e.data.buffer]);
+        }
+        console.log('buildin\' cloud');
+    } else if (e.data.vertexCount) {
+        vertexCount = e.data.vertexCount;
+    } else if (e.data.view) {
+        throttledIndices(e.data.view);
+    } else if (e.data.port) {
+        port = e.data.port;
+    }
+}

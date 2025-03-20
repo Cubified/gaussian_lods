@@ -334,16 +334,16 @@ void main () {
 
     depth_mode = (u_viewMode == 1) ? 1.0 : 0.0;
 
-    for (int i = MAX_N_LODS - 1; i >= 0; i--) {
-        if (u_lodList[i] <= index) {
-            current_lod = i;
-            break;
-        }
-    }
+    // for (int i = MAX_N_LODS - 1; i >= 0; i--) {
+    //     if (u_lodList[i] <= index) {
+    //         current_lod = i;
+    //         break;
+    //     }
+    // }
 
-    if (u_viewMode == 2 && current_lod != u_lod) {
-        DISCARD;
-    }
+    // if (u_viewMode == 2 && current_lod != u_lod) {
+    //     DISCARD;
+    // }
 
     uvec4 cen = texelFetch(u_texture, ivec2((uint(index) & 0x3ffu) << 1, uint(index) >> 10), 0);
     vec4 cam = view * vec4(uintBitsToFloat(cen.xyz), 1);
@@ -355,9 +355,9 @@ void main () {
         DISCARD;
     }
 
-    if (u_viewMode != 2 && (vDepth > lod_depths[current_lod] || (current_lod > 0 && vDepth <= lod_depths[current_lod - 1]))) {
-        DISCARD;
-    }
+    // if (u_viewMode != 2 && (vDepth > lod_depths[current_lod] || (current_lod > 0 && vDepth <= lod_depths[current_lod - 1]))) {
+    //     DISCARD;
+    // }
     vLod = float(current_lod) / float(MAX_N_LODS);
 
     uvec4 cov = texelFetch(u_texture, ivec2(((uint(index) & 0x3ffu) << 1) | 1u, uint(index) >> 10), 0);
@@ -457,7 +457,11 @@ async function main() {
         splatData.length / rowLength > 500000 ? 1 : 1 / devicePixelRatio;
     console.log(splatData.length / rowLength, downsample);
 
-    const worker = new Worker("worker.js");
+    const sortworker = new Worker("worker.js");
+    const bvhworker = new Worker("bvh.js");
+    const channel = new MessageChannel();
+    sortworker.postMessage({ port: channel.port1 }, [channel.port1]);
+    bvhworker.postMessage({ port: channel.port2 }, [channel.port2]);
 
     const canvas = document.getElementById("canvas");
     const fps = document.getElementById("fps");
@@ -563,7 +567,7 @@ async function main() {
     window.addEventListener("resize", resize);
     resize();
 
-    worker.onmessage = (e) => {
+    bvhworker.onmessage = (e) => {
         if (e.data.buffer) {
             splatData = new Uint8Array(e.data.buffer);
 
@@ -579,7 +583,11 @@ async function main() {
                 document.body.appendChild(link);
                 link.click();
             }
-        } else if (e.data.texdata) {
+        }
+    };
+
+    sortworker.onmessage = (e) => {
+        if (e.data.texdata) {
             const { texdata, texwidth, texheight } = e.data;
             // console.log(texdata)
             gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -1065,7 +1073,8 @@ async function main() {
         let actualViewMatrix = invert4(inv2);
 
         const viewProj = multiply4(projectionMatrix, actualViewMatrix);
-        worker.postMessage({ view: viewProj });
+        sortworker.postMessage({ view: viewProj });
+        bvhworker.postMessage({ view: viewProj });
 
         const currentFps = 1000 / (now - lastFrame) || 0;
         avgFps = avgFps * 0.9 + currentFps * 0.1;
@@ -1074,7 +1083,8 @@ async function main() {
             document.getElementById("spinner").style.display = "none";
             gl.uniformMatrix4fv(u_view, false, actualViewMatrix);
             gl.clear(gl.COLOR_BUFFER_BIT);
-            gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount / 2);
+            console.log(`Drawing ${vertexCount} gaussians`);
+            gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
         } else {
             gl.clear(gl.COLOR_BUFFER_BIT);
             document.getElementById("spinner").style.display = "";
@@ -1127,9 +1137,9 @@ async function main() {
 
                 if (isPly(splatData)) {
                     // ply file magic header means it should be handled differently
-                    worker.postMessage({ ply: splatData.buffer, save: false });
+                    bvhworker.postMessage({ ply: splatData.buffer, save: false });
                 } else {
-                    worker.postMessage({
+                    bvhworker.postMessage({
                         buffer: splatData.buffer,
                         vertexCount: Math.floor(splatData.length / rowLength),
                     });
@@ -1162,7 +1172,7 @@ async function main() {
     let bytesRead = 0;
     let lastVertexCount = -1;
     let stopLoading = false;
-
+    console.log("start loading");
     while (true) {
         const { done, value } = await reader.read();
         if (done || stopLoading) break; // TODO: notify worker thread to rebuild BVH one last time?
@@ -1172,20 +1182,21 @@ async function main() {
 
         if (vertexCount > lastVertexCount) {
             if (!isPly(splatData)) {
-                worker.postMessage({
-                    buffer: splatData.buffer,
-                    vertexCount: Math.floor(bytesRead / rowLength),
-                });
+                // bvhworker.postMessage({
+                //     buffer: splatData.buffer,
+                //     vertexCount: Math.floor(bytesRead / rowLength),
+                // });
             }
             lastVertexCount = vertexCount;
         }
     }
     if (!stopLoading) {
+        console.log("done loading");
         if (isPly(splatData)) {
             // ply file magic header means it should be handled differently
-            worker.postMessage({ ply: splatData.buffer, save: false });
+            bvhworker.postMessage({ ply: splatData.buffer, save: false });
         } else {
-            worker.postMessage({
+            bvhworker.postMessage({
                 buffer: splatData.buffer,
                 vertexCount: Math.floor(bytesRead / rowLength),
             });
