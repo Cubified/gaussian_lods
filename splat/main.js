@@ -840,7 +840,7 @@ async function main() {
 
     let projectionMatrix;
     let currentLod = 0;
-    let viewMode = 0;
+    let viewMode = 2;
 
     const gl = canvas.getContext("webgl2", {
         antialias: false,
