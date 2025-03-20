@@ -1,3 +1,10 @@
+let module;
+importScripts('bvh_wasm.js');
+
+bvh_WASM_Module().then(response => {
+    module = response;
+});
+
 /**
  * Axis-Aligned Bounding Box
  */
@@ -599,12 +606,12 @@ function processPlyBuffer(inputBuffer) {
 let indicesRunning = false;
 
 const throttledIndices = (view) => {
-    // if (port) {
     if (!indicesRunning && bvh && port) {
         indicesRunning = true;
         let lastView = view;
         console.log("starting indices");
-        let indices = bvh.getIndices(view);
+        let indices = bvh.getIndicesJS(view);
+        indices = new Uint32Array(Array.from({ length: indices.size() }, (_, i) => indices.get(i)));
         port.postMessage({ indices: indices });
         console.log("finished indices");
 
@@ -619,6 +626,7 @@ const throttledIndices = (view) => {
 
 onmessage = (e) => {
     if (e.data.ply) {
+        // This is unused mostly
         vertexCount = 0;
         let buffer;
         let lodList;
@@ -635,15 +643,25 @@ onmessage = (e) => {
         }
         postMessage({ buffer, lodList, save: false }, [buffer, lodList]);
     } else if (e.data.buffer) {
-        bvh = new BoundingVolumeHierarchy(e.data.buffer, e.data.vertexCount);
-        let buffer = bvh.cloud.toBuffer();
+        while (!module); // gross but it works
+        let arr = new Uint8Array(e.data.buffer);
+        console.log('buildin\' bvh');
+        bvh = new module.BoundingVolumeHierarchy(arr, e.data.vertexCount);
+        console.log('bvh complete');
+        let buftmp = bvh.toBuffer();
+        vertexCount = bvh.size();
+        let buffer = new Uint8Array(Array.from({ length: buftmp.size() }, (_, i) => buftmp.get(i)));
+        // console.log(`size: ${vertexCount}`);
+        // let arr = new Uint8Array(e.data.buffer);
+        // let cloud = new module.GaussianCloud(arr, e.data.vertexCount);
+        // let buftmp = cloud.toBuffer();
+        // let buffer = new Uint8Array(Array.from({ length: arr.length }, (_, i) => buftmp.get(i)));
         if (port) {
             port.postMessage({
-                buffer: buffer,
-                vertexCount: bvh.vertexCount
-            }, [e.data.buffer]);
+                buffer: buffer.buffer,
+                vertexCount: vertexCount
+            }, [buffer.buffer]);
         }
-        console.log('buildin\' cloud');
     } else if (e.data.vertexCount) {
         vertexCount = e.data.vertexCount;
     } else if (e.data.view) {

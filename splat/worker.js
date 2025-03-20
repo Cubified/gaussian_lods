@@ -1,9 +1,9 @@
 let module;
-importScripts('lod.js');
+// importScripts('lod.js');
 
-LoD_WASM_Module().then(response => {
-    module = response;
-});
+// LoD_WASM_Module().then(response => {
+//     module = response;
+// });
 
 let buffer;
 let indices;
@@ -144,7 +144,7 @@ function runSort(viewProj) {
         generateTexture();
         lastVertexCount = vertexCount;
     }
-
+    console.time("sort");
     let maxDepth = -Infinity;
     let minDepth = Infinity;
     let vertRender = indices.length;
@@ -174,7 +174,7 @@ function runSort(viewProj) {
     depthIndex = new Uint32Array(vertRender);
     for (let i = 0; i < vertRender; i++)
         depthIndex[starts0[sizeList[i]]++] = indices[i];
-
+    console.timeEnd("sort");
     // TODO: adjust how many gaussians to render w/ vertexCount?
 
     // // For f_buffer (assumed to be a Float32Array)
