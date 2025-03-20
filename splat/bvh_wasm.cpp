@@ -304,11 +304,11 @@ public:
             maxz = std::max(maxz, nc.z());
         }
 
-        if (maxz < -1.2 || minz > 1.2 || maxx < -1.2 || minx > 1.2 || maxy < -1.2 || miny  > 1.2) {
+        if (maxz < -1 || minz > 1 || maxx < -1.2 || minx > 1.2 || maxy < -1.2 || miny  > 1.2) {
             return;
         }
 
-        if (!left || !right || maxx - minx < 0.01 || maxy - miny < 0.01) {
+        if (!left || !right || maxx - minx < 0.02 || maxy - miny < 0.02) {
             indices.push_back(index);
         } else {
             left->getIndices(indices, viewProj);

@@ -438,10 +438,10 @@ async function main() {
     const url = new URL(
         // "nike.splat",
         // location.href,
-        "scans/treehill.splat",
-        "http://localhost:5500/splat/"
-        // params.get("url") || "train.splat",
-        // "https://huggingface.co/cakewalk/splat-data/resolve/main/",
+        // "scans/bicycle.splat",
+        // "http://localhost:5500/splat/"
+        params.get("url") || "train.splat",
+        "https://huggingface.co/cakewalk/splat-data/resolve/main/",
     );
     const req = await fetch(url, {
         mode: "cors", // no-cors, *cors, same-origin
