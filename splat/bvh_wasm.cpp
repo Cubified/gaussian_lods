@@ -84,10 +84,10 @@ class GaussianCloud {
 public:
     GaussianCloud() : vertexCount(0) {}
     GaussianCloud(void *buffer, size_t vertexCount) {
-        positions.reserve(vertexCount);
-        scales.reserve(vertexCount);
-        rotations.reserve(vertexCount);
-        rgba.reserve(vertexCount);
+        positions.reserve(2 * vertexCount);
+        scales.reserve(2 * vertexCount);
+        rotations.reserve(2 * vertexCount);
+        rgba.reserve(2 * vertexCount);
 
         for (size_t i = 0; i < vertexCount; i++) {
             parseElement(buffer, i);
@@ -99,10 +99,10 @@ public:
         std::vector<uint8_t> tmp;
         copyToVector(buftmp, tmp);
         void *buffer = tmp.data();
-        positions.reserve(vertexCount);
-        scales.reserve(vertexCount);
-        rotations.reserve(vertexCount);
-        rgba.reserve(vertexCount);
+        positions.reserve(2 * vertexCount);
+        scales.reserve(2 * vertexCount);
+        rotations.reserve(2 * vertexCount);
+        rgba.reserve(2 * vertexCount);
 
         for (size_t i = 0; i < vertexCount; i++) {
             parseElement(buffer, i);
@@ -304,7 +304,7 @@ public:
             maxz = std::max(maxz, nc.z());
         }
 
-        if (maxz < -1 || minz > 1 || maxx < -1 || minx > 1 || maxy < -1 || miny  > 1) {
+        if (maxz < -1.2 || minz > 1.2 || maxx < -1.2 || minx > 1.2 || maxy < -1.2 || miny  > 1.2) {
             return;
         }
 

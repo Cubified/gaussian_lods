@@ -52,6 +52,7 @@ function packHalf2x16(x, y) {
 
 function generateTexture() {
     if (!buffer) return;
+    console.log("makin' texture");
     console.time("gentex");
     const f_buffer = new Float32Array(buffer);
     const u_buffer = new Uint8Array(buffer);
@@ -139,7 +140,6 @@ function runSort(viewProj) {
         generateTexture();
         lastVertexCount = vertexCount;
     }
-    console.time("sort");
     let maxDepth = -Infinity;
     let minDepth = Infinity;
     let vertRender = indices.length;
@@ -169,7 +169,6 @@ function runSort(viewProj) {
     depthIndex = new Uint32Array(vertRender);
     for (let i = 0; i < vertRender; i++)
         depthIndex[starts0[sizeList[i]]++] = indices[i];
-    console.timeEnd("sort");
     // TODO: adjust how many gaussians to render w/ vertexCount?
 
     // // For f_buffer (assumed to be a Float32Array)

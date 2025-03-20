@@ -647,10 +647,17 @@ onmessage = (e) => {
         let arr = new Uint8Array(e.data.buffer);
         console.log('buildin\' bvh');
         bvh = new module.BoundingVolumeHierarchy(arr, e.data.vertexCount);
+        e.data.buffer = undefined; // force garbage collection
         console.log('bvh complete');
         let buftmp = bvh.toBuffer();
+        console.log('buffered');
         vertexCount = bvh.size();
-        let buffer = new Uint8Array(Array.from({ length: buftmp.size() }, (_, i) => buftmp.get(i)));
+        let buffer = new Uint8Array(buftmp.size());
+        for (let i = 0; i < buftmp.size(); i++) {
+            buffer[i] = buftmp.get(i);
+        }
+        console.log('actually buffered');
+        buftmp = undefined; // free up some memory
         // console.log(`size: ${vertexCount}`);
         // let arr = new Uint8Array(e.data.buffer);
         // let cloud = new module.GaussianCloud(arr, e.data.vertexCount);

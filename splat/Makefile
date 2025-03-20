@@ -8,7 +8,7 @@ SHELL := /bin/bash
 EMCC_HOME=/home/benjx/cs_wsl/emsdk
 EMCC_ENV=emsdk_env.sh
 LIBS=-I/usr/include/eigen3
-CFLAGS=-std=c++17 -O3 -DEIGEN_DONT_PARALLELIZE
+CFLAGS=-std=c++17 -O3 -DEIGEN_DONT_PARALLELIZE -s ASSERTIONS
  # I'm too lazy to set up C++20 on my machine
 EMFLAGS=-s MODULARIZE -s EXPORT_NAME="bvh_WASM_Module" -s ENVIRONMENT=worker --bind -s INITIAL_MEMORY=268435456 -s ALLOW_MEMORY_GROWTH=1
 EXPORTS=-s EXPORTED_FUNCTIONS="['_malloc', '_free']"

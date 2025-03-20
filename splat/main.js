@@ -438,8 +438,10 @@ async function main() {
     const url = new URL(
         // "nike.splat",
         // location.href,
-        params.get("url") || "train.splat",
-        "https://huggingface.co/cakewalk/splat-data/resolve/main/",
+        "scans/treehill.splat",
+        "http://localhost:5500/splat/"
+        // params.get("url") || "train.splat",
+        // "https://huggingface.co/cakewalk/splat-data/resolve/main/",
     );
     const req = await fetch(url, {
         mode: "cors", // no-cors, *cors, same-origin
@@ -1141,7 +1143,7 @@ async function main() {
                     bvhworker.postMessage({
                         buffer: splatData.buffer,
                         vertexCount: Math.floor(splatData.length / rowLength),
-                    });
+                    }, [splatData.buffer]);
                 }
             };
             fr.readAsArrayBuffer(file);
