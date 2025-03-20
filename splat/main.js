@@ -840,7 +840,7 @@ async function main() {
 
     let projectionMatrix;
     let currentLod = 0;
-    let viewMode = 0;
+    let viewMode = 2;
 
     const gl = canvas.getContext("webgl2", {
         antialias: false,
@@ -1033,7 +1033,12 @@ async function main() {
         }
 
         if (e.code == "KeyO") {
-            viewMode = (viewMode + 1) % 3;
+            if (e.shiftKey) {
+                viewMode--;
+                if (viewMode < 0) viewMode = 2;
+            } else {
+                viewMode = (viewMode + 1) % 3;
+            }
             gl.uniform1i(u_viewMode, viewMode);
         }
         if (e.code === "KeyG") {
