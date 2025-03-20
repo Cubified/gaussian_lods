@@ -795,7 +795,7 @@ let defaultViewMatrix = [
 let viewMatrix = defaultViewMatrix;
 async function main() {
     module = await LoD_WASM_Module();
-    alert(module.test());
+    // alert(module.test());
     let carousel = true;
     const params = new URLSearchParams(location.search);
     try {
